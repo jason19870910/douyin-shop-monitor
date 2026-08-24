@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  cleanup-and-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Clean backup files
+        run: |
+          Get-ChildItem -Recurse -Include *.bak,*.old,*~,*.dist,*.backup -File | Remove-Item -Force
+
+      - name: Verify no backup files remain
+        run: |
+          $files = Get-ChildItem -Recurse -Include *.bak,*.old,*~,*.dist,*.backup -File
+          if ($files.Count -gt 0) {
+            Write-Error "Found $($files.Count) backup files that should have been cleaned"
+            $files | Select-Object FullName
+            exit 1
+          }
+          Write-Host "No backup files found - cleanup verified"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: ./frontend
+
+      - name: Run frontend lint
+        run: npm run lint
+        working-directory: ./frontend
+
+      - name: Run frontend tests
+        run: npm test -- --watchAll=false --ci
+        working-directory: ./frontend
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: ./frontend
