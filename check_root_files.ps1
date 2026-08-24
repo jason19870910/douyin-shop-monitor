@@ -1,0 +1,3 @@
+Get-ChildItem 'C:\Users\Administrator\Documents\trae_projects\douyin' -File | Where-Object { 
+    $_.Name -match '^(app\.py|config\.py|requirements\.txt|README\.md|Dockerfile|docker-compose\.yml|\.gitignore|CHANGELOG\.md|ARCHITECTURE\.md|DESIGN\.md|FRONTEND_DESIGN\.md|PROJECT_CHARTER\.md|REQUIREMENTS\.md|QUALITY_PLAN\.md|RISK_REGISTER\.md|COMMUNICATION_PLAN\.md|SECURITY_HARDENING\.md|TEST_STRATEGY\.md|RUNBOOK\.md|ISSUE_ANALYSIS\.md|DEPLOYMENT\.md|env\.sample|tsconfig\.json|vite\.config\.ts|webpack\.config\.js)$'
+} | Select-Object Name, LastWriteTime, Length
