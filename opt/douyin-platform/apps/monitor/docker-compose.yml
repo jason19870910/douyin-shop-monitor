@@ -1,24 +1,29 @@
 version: "3.8"
+
 services:
+  # Monitor API Service
   monitor:
-    build: "."
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: douyin_monitor
     restart: unless-stopped
     environment:
       - DATA_DIR=/data
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
-      # 外部 API 基础 URL
+      # External API Base URLs
       - FXG_BASE_URL=https://fxg.jinritemai.com
       - CREATOR_BASE_URL=https://creator.douyin.com
-      # 其他配置
+      # Alerts
       - ALERT_EMAIL=${ALERT_EMAIL}
       - SCHEDULE_INTERVAL_MINUTES=60
       - API_AUTH_TOKEN=${API_AUTH_TOKEN}
       - USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36
-      # Celery 配置
+      # Celery Configuration
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      # Nginx proxy
       - VIRTUAL_HOST=wlkj-tech.cn
       - VIRTUAL_PORT=5000
     secrets:
@@ -35,11 +40,6 @@ services:
       - fxg_shop_id
       - fxg_log_id
       - api_key
-    #volumes:
-    #  - ./data:/data
-    #  - ~/.cache:/root/.cache
-    #  - ./app.py:/app/app.py
-    #  - ./config.py:/app/config.py
     ports:
       - "5000:5000"
     command: gunicorn app:app --bind 0.0.0.0:5000 --workers 4 --timeout 60 --access-logfile - --error-logfile -
@@ -63,7 +63,9 @@ services:
 
   # Celery Worker
   celery_worker:
-    build: "."
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: douyin_celery_worker
     restart: unless-stopped
     environment:
@@ -86,8 +88,6 @@ services:
       - fp
       - fxg_shop_id
       - fxg_log_id
-    #volumes:
-    #  - ./data:/data
     command: celery -A celery_config worker --loglevel=info --concurrency=2 --pool=prefork
     depends_on:
       redis:
@@ -101,9 +101,11 @@ services:
           cpus: '0.5'
           memory: 256M
 
-  # Celery Beat (定时任务)
+  # Celery Beat (Scheduled Tasks)
   celery_beat:
-    build: "."
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: douyin_celery_beat
     restart: unless-stopped
     environment:
@@ -126,8 +128,6 @@ services:
       - fp
       - fxg_shop_id
       - fxg_log_id
-    #volumes:
-    #  - ./data:/data
     command: celery -A celery_config beat --loglevel=info --scheduler celery.beat.PersistentScheduler
     depends_on:
       redis:

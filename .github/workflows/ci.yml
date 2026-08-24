@@ -6,28 +6,118 @@ on:
   pull_request:
     branches: [main, master]
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
-  cleanup-and-test:
-    runs-on: windows-latest
+  # ==========================================
+  # Code Quality & Cleanup
+  # ==========================================
+  cleanup-and-lint:
+    name: Cleanup & Lint
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Clean backup files
         run: |
-          Get-ChildItem -Recurse -Include *.bak,*.old,*~,*.dist,*.backup -File | Remove-Item -Force
+          # Standard backup extensions
+          find . -type f \( \
+            -name "*.bak" -o -name "*.bak.*" -o \
+            -name "*.old" -o -name "*.old.*" -o \
+            -name "*~" -o \
+            -name "*.dist" -o \
+            -name "*.backup" -o \
+            -name "*.orig" -o \
+            -name "*.swp" -o \
+            -name "*.tmp" -o \
+            -name "*.temp" \
+          \) -delete
+          # Timestamped backups (e.g., alerts.py.bak.20260801)
+          find . -type f -name "*.bak.*" -delete
+          # Empty directories after cleanup
+          find . -type d -empty -delete 2>/dev/null || true
+          echo "Cleanup completed"
 
       - name: Verify no backup files remain
         run: |
-          $files = Get-ChildItem -Recurse -Include *.bak,*.old,*~,*.dist,*.backup -File
-          if ($files.Count -gt 0) {
-            Write-Error "Found $($files.Count) backup files that should have been cleaned"
-            $files | Select-Object FullName
+          files=$(find . -type f \( \
+            -name "*.bak" -o -name "*.bak.*" -o \
+            -name "*.old" -o -name "*.old.*" -o \
+            -name "*~" -o \
+            -name "*.dist" -o \
+            -name "*.backup" -o \
+            -name "*.orig" -o \
+            -name "*.swp" -o \
+            -name "*.tmp" -o \
+            -name "*.temp" \
+          \))
+          if [ -n "$files" ]; then
+            echo "Found backup files that should have been cleaned:"
+            echo "$files"
             exit 1
-          }
-          Write-Host "No backup files found - cleanup verified"
+          fi
+          echo "No backup files found - cleanup verified"
 
-      - name: Setup Node.js
+      - name: Verify no npm pollution in root
+        run: |
+          # Check for npm source files in root directory
+          npm_files=$(find . -maxdepth 1 -type f \( \
+            -name "*.js" -o -name "*.ts" -o -name "*.tsx" -o -name "*.jsx" \
+          \) | head -5)
+          if [ -n "$npm_files" ]; then
+            echo "Found npm pollution files in root:"
+            echo "$npm_files"
+            exit 1
+          fi
+          echo "No npm pollution in root - verified"
+
+      - name: Verify no sensitive files in root
+        run: |
+          sensitive=$(find . -maxdepth 1 -type f \( \
+            -name "douyin_app_id.txt" -o \
+            -name "douyin_app_secret.txt" -o \
+            -name "douyin_access_token.txt" -o \
+            -name "fxg_cookies.txt" -o \
+            -name "creator_cookies.txt" -o \
+            -name "token.txt" -o \
+            -name "ms_token.txt" -o \
+            -name "a_bogus.txt" -o \
+            -name "verify_fp.txt" -o \
+            -name "fp.txt" -o \
+            -name "fxg_shop_id.txt" -o \
+            -name "fxg_log_id.txt" -o \
+            -name "api_key.txt" \
+          \))
+          if [ -n "$sensitive" ]; then
+            echo "Found sensitive files in root:"
+            echo "$sensitive"
+            exit 1
+          fi
+          echo "No sensitive files in root - verified"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: opt/douyin-platform/apps/monitor/requirements.txt
+
+      - name: Install monitor dependencies
+        run: |
+          cd opt/douyin-platform/apps/monitor
+          pip install -r requirements.txt
+          pip install ruff pytest pytest-cov
+
+      - name: Run monitor lint (ruff)
+        run: |
+          cd opt/douyin-platform/apps/monitor
+          ruff check .
+          ruff format --check .
+
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -42,10 +132,158 @@ jobs:
         run: npm run lint
         working-directory: ./frontend
 
-      - name: Run frontend tests
-        run: npm test -- --watchAll=false --ci
+  # ==========================================
+  # Tests
+  # ==========================================
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: cleanup-and-lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: opt/douyin-platform/apps/monitor/requirements.txt
+
+      - name: Install monitor dependencies
+        run: |
+          cd opt/douyin-platform/apps/monitor
+          pip install -r requirements.txt
+          pip install pytest pytest-cov responses
+
+      - name: Run monitor tests
+        run: |
+          cd opt/douyin-platform/apps/monitor
+          python -m pytest tests/ -v --cov=app --cov-report=xml --cov-report=term-missing
+
+      - name: Upload monitor coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: opt/douyin-platform/apps/monitor/coverage.xml
+          flags: monitor
+          name: monitor-coverage
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
         working-directory: ./frontend
 
-      - name: Build frontend
-        run: npm run build
+      - name: Run frontend tests
+        run: npm test -- --watchAll=false --ci --coverage
         working-directory: ./frontend
+
+      - name: Upload frontend coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: frontend/coverage/lcov.info
+          flags: frontend
+          name: frontend-coverage
+
+  # ==========================================
+  # Build Docker Images
+  # ==========================================
+  build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for monitor
+        id: meta-monitor
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/monitor
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push monitor image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./opt/douyin-platform/apps/monitor
+          file: ./opt/douyin-platform/apps/monitor/Dockerfile
+          push: true
+          tags: ${{ steps.meta-monitor.outputs.tags }}
+          labels: ${{ steps.meta-monitor.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract metadata for frontend
+        id: meta-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ==========================================
+  # Deploy (optional - requires environment setup)
+  # ==========================================
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - name: Deploy to production
+        run: |
+          echo "Deploy to production server..."
+          # Add your deployment commands here
+          # Example: ssh user@server "cd /path/to/project && docker compose pull && docker compose up -d"
+          echo "Deployment placeholder - configure your deployment method"
+
+  # ==========================================
+  # Notify (on failure)
+  # ==========================================
+  notify-failure:
+    name: Notify Failure
+    runs-on: ubuntu-latest
+    needs: [cleanup-and-lint, test, build]
+    if: failure()
+    steps:
+      - name: Send failure notification
+        run: |
+          echo "CI pipeline failed!"
+          # Add notification logic here (Slack, Discord, Email, etc.)
+          # Example: curl -X POST -H 'Content-type: application/json' --data '{"text":"CI Failed: ${{ github.repository }} ${{ github.workflow }}"}' ${{ secrets.SLACK_WEBHOOK_URL }}

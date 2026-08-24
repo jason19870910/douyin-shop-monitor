@@ -1,2 +1,0 @@
-$monitorDir = 'C:\Users\Administrator\Documents\trae_projects\douyin\opt\douyin-platform\apps\monitor'
-Get-ChildItem $monitorDir -File | Where-Object { $_.Name -match '^(app\.py|config\.py|requirements\.txt|ARCHITECTURE\.md|DESIGN\.md|FRONTEND_DESIGN\.md|COMMUNICATION_PLAN\.md|QUALITY_PLAN\.md|RISK_REGISTER\.md|REQUIREMENTS\.md|PROJECT_CHARTER\.md|ISSUE_ANALYSIS\.md)$' } | Select-Object Name

@@ -1,8 +1,11 @@
-# Backup directories
-douyin_backup_*/
-
+# ==========================================
+# Project structure
+# ==========================================
 # Frontend has its own git repo
 frontend/
+
+# Backup directories
+douyin_backup_*/
 
 # IDE
 .vscode/
@@ -12,7 +15,28 @@ frontend/
 .DS_Store
 Thumbs.db
 
+# ==========================================
+# Sensitive files (secrets should be in monitor/secrets/ only)
+# ==========================================
+# Root-level sensitive files are NOT allowed
+/douyin_app_id.txt
+/douyin_app_secret.txt
+/douyin_access_token.txt
+/fxg_cookies.txt
+/creator_cookies.txt
+/token.txt
+/ms_token.txt
+/a_bogus.txt
+/verify_fp.txt
+/fp.txt
+/fxg_shop_id.txt
+/fxg_log_id.txt
+/api_key.txt
+/monitor_env_tmp
+
+# ==========================================
 # Python
+# ==========================================
 __pycache__/
 *.pyc
 *.pyo
@@ -22,20 +46,186 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.venv/
+venv/
 
-# Node
+# ==========================================
+# Node.js / npm - prevent npm pollution in root
+# ==========================================
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+yarn.lock
+package-lock.json
 
+# npm binary executables (should only exist in node_modules/.bin/)
+acorn
+acorn.ps1
+autoprefixer
+autoprefixer.ps1
+baseline-browser-mapping
+baseline-browser-mapping.ps1
+browserslist
+browserslist.ps1
+chroma
+chroma.ps1
+chromatic
+chromatic.ps1
+chromatic-cli
+chromatic-cli.ps1
+cssesc
+cssesc.ps1
+esbuild
+esbuild.ps1
+eslint
+eslint.ps1
+esparse
+esparse.ps1
+esvalidate
+esvalidate.ps1
+getstorybook
+getstorybook.ps1
+glob
+glob.ps1
+is-docker
+is-docker.ps1
+jsesc
+jsesc.ps1
+json5
+json5.ps1
+js-yaml
+js-yaml.ps1
+loose-envify
+loose-envify.ps1
+lz-string
+lz-string.ps1
+nanoid
+nanoid.ps1
+node-which
+node-which.ps1
+parser
+parser.ps1
+resolve
+resolve.ps1
+rollup
+rollup.ps1
+sb
+sb.ps1
+semver
+semver.ps1
+storybook
+storybook.ps1
+tsc
+tsc.ps1
+tsserver
+tsserver.ps1
+update-browserslist-db
+update-browserslist-db.ps1
+uuid
+uuid.ps1
+vite
+vite.ps1
+
+# npm config files (root level - should not be tracked)
+.babelrc
+.browserslistrc
+.eslintrc
+.eslintrc.yml
+.eslintignore
+.prettierignore
+.jshintrc
+.npmignore
+.nvmrc
+.nycrc
+.node-version
+.yarnrc
+.prototools
+
+# npm legal/misc files
+LICENCE
+LICENSE
+LICENSE-MIT
+LICENSE-MIT.txt
+LICENSE.BSD
+LICENSE.closure-compiler
+LICENSE.esprima
+LICENSE.txt
+MIT.LICENSE
+LICENCE.md
+ChangeLog
+CopyrightNotice.txt
+ThirdPartyNoticeText.txt
+CACHEDIR.TAG
+FUNDING.yml
+*.LICENSE.txt
+tsconfig.tsbuildinfo
+
+# npm source code files (should only exist in node_modules/)
+# Locale files
+2015.js
+2016.js
+2017.js
+2018.js
+2019.js
+2020.js
+2021.js
+2022.js
+2023.js
+2024.js
+2025.js
+
+# npm binary wrappers (.cmd)
+*.cmd
+
+# npm type definition files
+*.d.mts
+*.d.cts
+
+# npm component files
+*.jsx
+*.svelte
+
+# npm native modules
+*.node
+
+# npm executables
+*.exe
+
+# npm man pages
+*.1
+
+# npm html files (not project html)
+API.html
+SpecRunner.html
+base-preview-*.html
+iframe.html
+index.html
+report.html
+tslib*.html
+
+# Archives and packages
+*.tar.gz
+*.zip
+deploy_package.tar.gz
+monitor_sync.tar.gz
+sync_source.tar.gz
+sync_update.tar.gz
+sync_update.zip
+
+# ==========================================
 # Docker
+# ==========================================
 .docker/
 
+# ==========================================
 # Logs
+# ==========================================
 *.log
 
+# ==========================================
 # Temporary files
+# ==========================================
 *.tmp
 *.temp
 *.bak
@@ -43,3 +233,6 @@ yarn-error.log*
 *~
 *.dist
 *.backup
+monitor_env_tmp
+lastfailed
+nodeids
