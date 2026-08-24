@@ -1,0 +1,79 @@
+@import '../../theme/variables.css';
+
+.card {
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-5);
+  box-shadow: var(--shadow-md);
+  transition: all var(--transition-base);
+  position: relative;
+  overflow: hidden;
+}
+
+.card:hover {
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-2px);
+}
+
+.card.up {
+  border-top: 3px solid var(--color-trend-up);
+}
+
+.card.down {
+  border-top: 3px solid var(--color-trend-down);
+}
+
+.icon {
+  font-size: var(--font-size-2xl);
+  margin-bottom: var(--spacing-2);
+  opacity: 0.8;
+}
+
+.label {
+  font-size: var(--font-size-base);
+  color: var(--color-text-tertiary);
+  margin-bottom: var(--spacing-2);
+  font-weight: var(--font-weight-medium);
+}
+
+.subValue {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--color-border-light);
+}
+
+.subLabel {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.trend {
+  font-size: var(--font-size-xs);
+  margin-top: var(--spacing-2);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-weight: var(--font-weight-medium);
+}
+
+.trend.up {
+  color: var(--color-trend-up);
+}
+
+.trend.down {
+  color: var(--color-trend-down);
+}
+
+.error {
+  position: absolute;
+  top: var(--spacing-3);
+  right: var(--spacing-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-error-500);
+  background: var(--color-error-50);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-sm);
+}

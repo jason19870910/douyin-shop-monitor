@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+.github/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.manifest
+*.spec
+
+# Tests
+tests/
+.pytest_cache/
+coverage.xml
+htmlcov/
+.tox/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Project specific
+data/
+logs/
+compliance_rules.json
+compliance_ignore.json
+compliance_meta.json
+*.bak
+.env.backup*
+.env.clean
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,27 @@
+# Auto-generated lock file - DO NOT EDIT MANUALLY
+# Generated: 2026-06-29 (based on current dependencies)
+# Use: pip install -r requirements.lock.txt
+
+Flask==2.3.3
+requests==2.31.0
+APScheduler==3.10.4
+python-dotenv==1.0.0
+
+# Flask dependencies
+Werkzeug==2.3.7
+Jinja2==3.1.2
+itsdangerous==2.1.2
+click==8.1.7
+MarkupSafe==2.1.3
+
+# requests dependencies
+urllib3==2.0.7
+certifi==2023.7.22
+charset-normalizer==3.3.2
+idna==3.4
+
+# APScheduler dependencies
+pytz==2023.3.post1
+tzlocal==5.2
+
+# python-dotenv dependencies

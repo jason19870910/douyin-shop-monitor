@@ -1,0 +1,1 @@
+Get-ChildItem -Recurse | Where-Object { $_.Extension -match '\.(bak|old|~|dist|backup)$' } | Select-Object FullName, LastWriteTime

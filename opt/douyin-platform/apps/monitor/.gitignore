@@ -1,0 +1,81 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask session key
+session.key
+
+# Node / frontend
+node_modules/
+npm-debug.log
+yarn-error.log
+frontend/build/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Project specific
+data/
+logs/
+*.pid
+*.db
+!.env.example
+compliance_rules.json
+compliance_ignore.json
+compliance_meta.json
+
+# Backups (auto-generated)
+*.bak
+*.bak_*
+app.py.bak*
+.env.bak*
+.env.backup*
+.env.clean
+
+# Test artifacts
+.pytest_cache/
+htmlcov/.env
+
+# Environment variables (security)
+.env

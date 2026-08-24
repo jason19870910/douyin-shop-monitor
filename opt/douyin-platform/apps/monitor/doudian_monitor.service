@@ -1,0 +1,14 @@
+[Unit]
+Description=Douyin Monitor Service
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/douyin-platform/apps/monitor
+ExecStart=/usr/local/bin/docker-compose up -d
+ExecStop=/usr/local/bin/docker-compose down
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

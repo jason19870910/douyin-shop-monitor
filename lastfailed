@@ -1,0 +1,6 @@
+{
+  "tests/app_test.py::test_get_products": true,
+  "tests/app_test.py::test_get_orders": true,
+  "tests/app_test.py::test_get_creators": true,
+  "tests/app_test.py::test_dashboard_stats": true
+}

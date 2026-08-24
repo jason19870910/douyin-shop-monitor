@@ -1,0 +1,80 @@
+# git-cliff 配置文件
+# 参考: https://git-cliff.org/docs/configuration/
+
+[changelog]
+# 使用 Keep a Changelog 格式
+header = """
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""
+# 模板文件路径（可选）
+# template = "cliff.jinja"
+
+[git]
+# 常规提交信息解析
+conventional_commits = true
+# 提交信息正则（用于提取类型、作用域、主题等）
+commit_parsers = [
+    { message = "^(?P<type>feat|fix|docs|style|refactor|perf|test|chore|build|ci|revert)(?:\\((?P<scope>[^)]+)\\))?: (?P<message>.*)" }
+]
+# 忽略的提交
+filter_commits = false
+
+[changelog.header]
+# 版本标题模板
+version_format = "## [{version}] - {date}"
+# 日期格式
+date_format = "%Y-%m-%d"
+
+[changelog.body]
+# 分组配置
+group_by = "type"
+# 类型排序
+type_order = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "chore", "build", "ci", "revert"]
+# 显示作用域
+include_scope = true
+
+# 类型显示名称映射
+type_labels = {
+    "feat" = "### Added",
+    "fix" = "### Fixed",
+    "docs" = "### Documentation",
+    "style" = "### Style",
+    "refactor" = "### Refactored",
+    "perf" = "### Performance",
+    "test" = "### Tests",
+    "chore" = "### Chores",
+    "build" = "### Build",
+    "ci" = "### CI/CD",
+    "revert" = "### Reverted"
+}
+
+# 提交信息过滤
+trim = true
+# 忽略空分组
+skip_empty = true
+
+# 链接生成配置
+[changelog.links]
+# GitHub 仓库链接（需替换为实际仓库）
+repository = "https://github.com/yourusername/doudian_monitor"
+commit = true
+issue = true
+# 提交链接格式
+commit_link = "{repository}/commit/{sha}"
+# Issue 链接格式
+issue_link = "{repository}/issues/{issue}"
+
+# 版本标签正则
+[git.tag]
+pattern = "v[0-9]+.[0-9]+.[0-9]+"
+# 预发布版本标签
+prerelease = "v[0-9]+.[0-9]+.[0-9]+-(alpha|beta|rc).[0-9]+"
+
+# 保护分支
+[git.protected_branches]
+branches = ["main", "master"]

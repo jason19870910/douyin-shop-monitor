@@ -1,0 +1,22 @@
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+  align-items: center;
+}
+
+.tabs {
+  margin-bottom: var(--spacing-4);
+}
+
+.tabs :global(.ant-tabs-nav) {
+  margin-bottom: 0;
+}
+
+.tabs :global(.ant-tabs-tab) {
+  padding: var(--spacing-2) var(--spacing-4);
+}
+
+.tabs :global(.ant-tabs-tab-active) {
+  font-weight: 600;
+}

@@ -1,0 +1,270 @@
+"""
+告警模块：统一告警发送接口
+支持渠道：邮件、企业微信 Webhook、钉钉机器人
+"""""
+
+import os
+import json
+import smtplib
+import logging
+import requests
+from email.mime.text import MIMEText
+from typing import Dict, List, Optional
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+class AlertManager:
+    """告警管理器（支持文件配置覆盖环境变量）"""
+
+    def __init__(self):
+        # 基础配置（从环境变量读取）
+        self.smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+        self.smtp_port = int(os.getenv("SMTP_PORT", 587))
+        self.email_from = os.getenv("EMAIL_FROM", "")
+        self.email_password = os.getenv("EMAIL_PASSWORD", "")
+        self.email_to = os.getenv("EMAIL_TO", "").split(",") if os.getenv("EMAIL_TO") else []
+        self.wecom_webhook_url = os.getenv("WECOM_WEBHOOK_URL", "")
+        self.dingtalk_webhook_url = os.getenv("DINGTALK_WEBHOOK_URL", "")
+
+        # 告警级别颜色（企微）
+        self.level_colors = {
+            "INFO": "#1677ff",
+            "WARNING": "#faad14",
+            "ERROR": "#ff4d4f",
+            "CRITICAL": "#f5222d"
+        }
+
+        # 加载 JSON 配置文件（如存在）
+        self.config_file = os.getenv("ALERT_CONFIG_FILE", "data/alert_config.json")
+        self.user_config = self._load_user_config()
+
+        # 应用用户自定义配置（覆盖默认）
+        self._apply_user_config()
+
+    def _load_user_config(self) -> Dict:
+        """加载 JSON 配置文件"""
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"读取告警配置文件失败: {e}")
+        return {}
+
+    def _apply_user_config(self):
+        """应用用户配置"""
+        cfg = self.user_config
+
+        # 阈值覆盖
+        thresholds = cfg.get('thresholds', {})
+        self.thresholds = {
+            '待支付': thresholds.get('待支付', 50),
+            '异常包裹': thresholds.get('异常包裹', 10),
+            '待处理售后': thresholds.get('待处理售后', 20),
+            '已封禁': thresholds.get('已封禁', 5),
+            '待整改风险点': thresholds.get('待整改风险点', 5),
+            '待处理违规': thresholds.get('待处理违规', 5)
+        }
+
+        # 渠道开关覆盖
+        channels = cfg.get('channels', {})
+        self.channel_email = channels.get('email', self.email_from and self.email_password and bool(self.email_to))
+        self.channel_wecom = channels.get('wecom', bool(self.wecom_webhook_url))
+        self.channel_dingtalk = channels.get('dingtalk', bool(self.dingtalk_webhook_url))
+
+    def is_enabled(self) -> bool:
+        """检查是否配置了至少一种告警渠道"""
+        return self.channel_email or self.channel_wecom or self.channel_dingtalk
+
+    def send(self,
+             title: str,
+             content: str,
+             level: str = "INFO",
+             extra_data: Optional[Dict] = None) -> bool:
+        """
+        发送告警（多渠道）
+
+        Args:
+            title: 告警标题
+            content: 告警内容（纯文本）
+            level: 告警级别 (INFO, WARNING, ERROR, CRITICAL)
+            extra_data: 额外数据（用于结构化消息）
+
+        Returns:
+            是否至少一个渠道发送成功
+        """
+        success = False
+
+        # 1. 邮件渠道
+        if self.channel_email:
+            try:
+                self._send_email(title, content, level)
+                success = True
+            except Exception as e:
+                logger.error(f"邮件告警发送失败: {e}")
+
+        # 2. 企业微信渠道
+        if self.channel_wecom:
+            try:
+                self._send_wecom(title, content, level, extra_data)
+                success = True
+            except Exception as e:
+                logger.error(f"企业微信告警发送失败: {e}")
+
+        # 3. 钉钉通道
+        if self.channel_dingtalk:
+            try:
+                self._send_dingtalk(title, content, level, extra_data)
+                success = True
+            except Exception as e:
+                logger.error(f"钉钉告警发送失败: {e}")
+
+        if not success:
+            logger.warning("所有告警渠道均未配置或发送失败")
+
+        return success
+
+    def _send_email(self, subject: str, body: str, level: str):
+        """发送邮件告警"""
+        msg = MIMEText(body, 'plain', 'utf-8')
+        msg['Subject'] = f"[{level}] {subject}"
+        msg['From'] = self.email_from
+        msg['To'] = ", ".join(self.email_to)
+
+        with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+            server.starttls()
+            server.login(self.email_from, self.email_password)
+            server.sendmail(self.email_from, self.email_to, msg.as_string())
+
+        logger.info(f"邮件告警已发送: {subject}")
+
+    def _send_wecom(self,
+                    title: str,
+                    content: str,
+                    level: str,
+                    extra_data: Optional[Dict] = None):
+        """
+        发送企业微信机器人消息
+
+        文档：https://developer.work.weixin.qq.com/document/path/91770
+        """
+        color = self.level_colors.get(level.upper(), "#1677ff")
+
+        # 构建 Markdown 消息
+        msg = {
+            "msgtype": "markdown",
+            "markdown": {
+                "content": f"""**{title}**
+> **级别**: <font color="{color}">{level}</font>
+> **时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+> **内容**: {content}
+"""
+            }
+        }
+
+        # 如果有额外数据，添加详情字段
+        if extra_data:
+            details = "\n".join([f"- **{k}**: {v}" for k, v in extra_data.items()])
+            msg["markdown"]["content"] += f"\n**详情**:\n{details}"
+
+        resp = requests.post(
+            self.wecom_webhook_url,
+            json=msg,
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        resp.raise_for_status()
+
+        result = resp.json()
+        if result.get("errcode") != 0:
+            raise Exception(f"企微 API 错误: {result}")
+
+        logger.info(f"企业微信告警已发送: {title}")
+
+    def _send_dingtalk(self,
+                       title: str,
+                       content: str,
+                       level: str,
+                       extra_data: Optional[Dict] = None):
+        """
+        发送钉钉机器人消息
+
+        文档：https://open.dingtalk.com/document/orgapp/custom-robot-access
+        """
+        color = self.level_colors.get(level.upper(), "#1677ff")
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # 构建 Markdown 消息
+        text = (
+            f"#### {title}\n"
+            f"> **级别**: <font color='{color}'>{level}</font>\n"
+            f"> **时间**: {now_str}\n"
+            f"> **内容**: {content}"
+        )
+        if extra_data:
+            details = "\n".join([f"- **{k}**: {v}" for k, v in extra_data.items()])
+            text += f"\n\n**详情**:\n{details}"
+
+        msg = {
+            "msgtype": "markdown",
+            "markdown": {
+                "title": title[:1024],  # 钉钉标题长度限制
+                "text": text
+            }
+        }
+
+        resp = requests.post(
+            self.dingtalk_webhook_url,
+            json=msg,
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        resp.raise_for_status()
+
+        result = resp.json()
+        if result.get("errcode") != 0:
+            raise Exception(f"钉钉 API 错误: {result}")
+
+        logger.info(f"钉钉告警已发送: {title}")
+
+# 全局告警管理器实例
+alert_manager = AlertManager()
+
+def send_alert(title: str,
+               content: str,
+               level: str = "INFO",
+               extra_data: Optional[Dict] = None) -> bool:
+    """便捷函数：发送告警"""
+    return alert_manager.send(title, content, level, extra_data)
+
+
+def save_config(new_config: Dict) -> bool:
+    """保存用户告警配置到 JSON 文件"""
+    try:
+        # 确保目录存在
+        os.makedirs(os.path.dirname(alert_manager.config_file), exist_ok=True)
+        # 写入 JSON（覆盖）
+        with open(alert_manager.config_file, 'w', encoding='utf-8') as f:
+            json.dump(new_config, f, ensure_ascii=False, indent=2)
+        # 重新加载配置
+        alert_manager.user_config = alert_manager._load_user_config()
+        alert_manager._apply_user_config()
+        logger.info(f"告警配置已保存: {alert_manager.config_file}")
+        return True
+    except Exception as e:
+        logger.error(f"保存告警配置失败: {e}")
+        return False
+
+
+def get_config() -> Dict:
+    """获取当前生效的告警配置"""
+    return {
+        "thresholds": alert_manager.thresholds,
+        "channels": {
+            "email": alert_manager.channel_email,
+            "wecom": alert_manager.channel_wecom,
+            "dingtalk": alert_manager.channel_dingtalk
+        },
+        "config_file": alert_manager.config_file
+    }

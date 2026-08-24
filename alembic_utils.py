@@ -1,0 +1,416 @@
+"""
+Alembic integration for SQLAlchemy-based deployments.
+
+This module provides utilities to work with Alembic for database migrations
+when using SQLAlchemy ORM instead of the JSON file backend.
+
+Usage:
+    from migrations.alembic_utils import init_alembic, run_migrations
+    
+    # Initialize alembic in project
+    init_alembic()
+    
+    # Run migrations
+    run_migrations()
+"""
+import os
+import logging
+from pathlib import Path
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+
+def get_alembic_config(project_root: Path = None) -> Optional["alembic.config.Config"]:
+    """Get Alembic configuration object."""
+    try:
+        from alembic.config import Config
+    except ImportError:
+        logger.error("Alembic not installed. Run: pip install alembic")
+        return None
+    
+    if project_root is None:
+        project_root = Path.cwd()
+    
+    alembic_ini = project_root / "alembic.ini"
+    if not alembic_ini.exists():
+        logger.error(f"alembic.ini not found in {project_root}")
+        return None
+    
+    return Config(str(alembic_ini))
+
+
+def init_alembic(project_root: Path = None, template: str = "generic") -> bool:
+    """Initialize Alembic in the project.
+    
+    Creates:
+    - alembic.ini
+    - alembic/env.py
+    - alembic/script.py.mako
+    - alembic/versions/
+    """
+    try:
+        from alembic.config import Config
+        from alembic import command
+    except ImportError:
+        logger.error("Alembic not installed. Run: pip install alembic")
+        return False
+    
+    if project_root is None:
+        project_root = Path.cwd()
+    
+    alembic_dir = project_root / "alembic"
+    
+    if alembic_dir.exists():
+        logger.warning(f"Alembic already initialized at {alembic_dir}")
+        return True
+    
+    # Create alembic.ini
+    alembic_ini_content = """# A generic, single database configuration.
+
+[alembic]
+# template used to generate migration files
+# file_template = %%(rev)s_%%(slug)s
+
+# Logging configuration
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+qualname =
+
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+datefmt = %%H:%%M:%%S
+"""
+    
+    (project_root / "alembic.ini").write_text(alembic_ini_content)
+    
+    # Create alembic directory structure
+    alembic_dir.mkdir(exist_ok=True)
+    (alembic_dir / "versions").mkdir(exist_ok=True)
+    
+    # Create env.py
+    env_py_content = '''"""Alembic environment configuration."""
+import sys
+from pathlib import Path
+from logging.config import fileConfig
+
+from sqlalchemy import engine_from_config, pool
+from alembic import context
+
+# Add project root to path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+# Import your models here
+# from models import Base
+# target_metadata = Base.metadata
+
+target_metadata = None  # Set to your Base.metadata when models are defined
+
+# Interpret the config file for Python logging
+config = context.config
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+
+def run_migrations_offline() -> None:
+    """Run migrations in 'offline' mode."""
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode."""
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata
+        )
+
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+'''
+    
+    (alembic_dir / "env.py").write_text(env_py_content)
+    
+    # Create script.py.mako
+    script_mako_content = '''"""${message}
+
+Revision ID: ${up_revision}
+Revises: ${down_revision | comma,n}
+Create Date: ${create_date}
+
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+
+# revision identifiers, used by Alembic.
+revision: str = ${repr(up_revision)}
+down_revision: Union[str, None] = ${repr(down_revision)}
+branch_labels: Union[str, Sequence[str], None] = ${repr(branch_labels)}
+depends_on: Union[str, Sequence[str], None] = ${repr(depends_on)}
+
+
+def upgrade() -> None:
+    """${message}"""
+    # ### commands auto generated by Alembic - please adjust! ###
+    pass
+    # ### end Alembic commands ###
+
+
+def downgrade() -> None:
+    """Rollback ${message}"""
+    # ### commands auto generated by Alembic - please adjust! ###
+    pass
+    # ### end Alembic commands ###
+'''
+    
+    (alembic_dir / "script.py.mako").write_text(script_mako_content)
+    
+    # Create README
+    readme_content = """# Alembic Migrations
+
+This directory contains database migrations managed by Alembic.
+
+## Quick Start
+
+1. Configure database URL in `alembic.ini`:
+   ```ini
+   sqlalchemy.url = postgresql://user:pass@host/db
+   ```
+
+2. Create a new migration:
+   ```bash
+   alembic revision -m "description of changes"
+   ```
+
+3. Apply migrations:
+   ```bash
+   alembic upgrade head
+   ```
+
+4. Rollback:
+   ```bash
+   alembic downgrade -1
+   ```
+
+## Project Structure
+
+```
+alembic/
+├── env.py              # Environment configuration
+├── script.py.mako      # Migration template
+├── versions/           # Migration files
+└── README.md           # This file
+```
+
+## Integration with Application
+
+In your application startup:
+
+```python
+from migrations.alembic_utils import run_migrations
+
+# Run migrations on startup
+run_migrations()
+```
+
+## Models
+
+Define your SQLAlchemy models and set `target_metadata` in `env.py`:
+
+```python
+from models import Base
+target_metadata = Base.metadata
+```
+"""
+    
+    (alembic_dir / "README.md").write_text(readme_content)
+    
+    logger.info(f"Alembic initialized at {alembic_dir}")
+    return True
+
+
+def run_migrations(project_root: Path = None, revision: str = "head") -> bool:
+    """Run Alembic migrations."""
+    try:
+        from alembic import command
+    except ImportError:
+        logger.error("Alembic not installed. Run: pip install alembic")
+        return False
+    
+    config = get_alembic_config(project_root)
+    if config is None:
+        return False
+    
+    try:
+        command.upgrade(config, revision)
+        logger.info(f"Migrations applied successfully (revision: {revision})")
+        return True
+    except Exception as e:
+        logger.error(f"Migration failed: {e}")
+        return False
+
+
+def create_migration(message: str, project_root: Path = None, autogenerate: bool = True) -> bool:
+    """Create a new migration file."""
+    try:
+        from alembic import command
+    except ImportError:
+        logger.error("Alembic not installed. Run: pip install alembic")
+        return False
+    
+    config = get_alembic_config(project_root)
+    if config is None:
+        return False
+    
+    try:
+        command.revision(config, message=message, autogenerate=autogenerate)
+        logger.info(f"Migration created: {message}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to create migration: {e}")
+        return False
+
+
+def get_current_revision(project_root: Path = None) -> Optional[str]:
+    """Get current database revision."""
+    try:
+        from alembic import command
+        from alembic.script import ScriptDirectory
+    except ImportError:
+        logger.error("Alembic not installed. Run: pip install alembic")
+        return None
+    
+    config = get_alembic_config(project_root)
+    if config is None:
+        return None
+    
+    script_dir = ScriptDirectory.from_config(config)
+    heads = script_dir.get_heads()
+    return heads[0] if heads else None
+
+
+def stamp_database(revision: str = "head", project_root: Path = None) -> bool:
+    """Stamp database with revision without running migrations."""
+    try:
+        from alembic import command
+    except ImportError:
+        logger.error("Alembic not installed. Run: pip install alembic")
+        return False
+    
+    config = get_alembic_config(project_root)
+    if config is None:
+        return False
+    
+    try:
+        command.stamp(config, revision)
+        logger.info(f"Database stamped at revision: {revision}")
+        return True
+    except Exception as e:
+        logger.error(f"Stamp failed: {e}")
+        return False
+
+
+# CLI helper
+def main():
+    """Command-line interface for Alembic utilities."""
+    import sys
+    
+    if len(sys.argv) < 2:
+        print("Usage: python -m migrations.alembic_utils <command> [args]")
+        print("Commands:")
+        print("  init                    - Initialize Alembic in project")
+        print("  migrate [revision]      - Run migrations (default: head)")
+        print("  create <message>        - Create new migration")
+        print("  current                 - Show current revision")
+        print("  stamp <revision>        - Stamp database at revision")
+        sys.exit(1)
+    
+    command = sys.argv[1]
+    project_root = Path.cwd()
+    
+    if command == "init":
+        success = init_alembic(project_root)
+        sys.exit(0 if success else 1)
+    
+    elif command == "migrate":
+        revision = sys.argv[2] if len(sys.argv) > 2 else "head"
+        success = run_migrations(project_root, revision)
+        sys.exit(0 if success else 1)
+    
+    elif command == "create":
+        if len(sys.argv) < 3:
+            print("Usage: python -m migrations.alembic_utils create <message>")
+            sys.exit(1)
+        message = " ".join(sys.argv[2:])
+        success = create_migration(message, project_root)
+        sys.exit(0 if success else 1)
+    
+    elif command == "current":
+        rev = get_current_revision(project_root)
+        print(f"Current revision: {rev or 'None'}")
+    
+    elif command == "stamp":
+        if len(sys.argv) < 3:
+            print("Usage: python -m migrations.alembic_utils stamp <revision>")
+            sys.exit(1)
+        revision = sys.argv[2]
+        success = stamp_database(revision, project_root)
+        sys.exit(0 if success else 1)
+    
+    else:
+        print(f"Unknown command: {command}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

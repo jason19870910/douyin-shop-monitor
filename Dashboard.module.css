@@ -1,0 +1,217 @@
+@import '../theme/variables.css';
+
+/* 核心指标网格 - 响应式: 大屏6列, 中屏3列, 小屏2列, 超小屏1列 */
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: var(--spacing-4);
+  margin-bottom: var(--spacing-6);
+}
+
+@media (max-width: 1199px) {
+  .metricsGrid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .metricsGrid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--spacing-3);
+  }
+}
+
+@media (max-width: 480px) {
+  .metricsGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 趋势图表网格 - 响应式: 大屏4列, 中屏2列, 小屏1列 */
+.chartsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--spacing-4);
+  margin-bottom: var(--spacing-6);
+}
+
+@media (max-width: 1199px) {
+  .chartsGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .chartsGrid {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-3);
+  }
+}
+
+.chartWrapper {
+  min-height: 300px;
+}
+
+/* 区块网格 - 响应式: 大屏2列, 小屏1列 */
+.sectionGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-4);
+  margin-bottom: var(--spacing-6);
+}
+
+@media (max-width: 991px) {
+  .sectionGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 区块卡片 */
+.sectionCard {
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--color-border-light);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sectionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-4) var(--spacing-5);
+  border-bottom: 1px solid var(--color-border-light);
+  background: var(--color-bg-tertiary);
+}
+
+.sectionHeader Title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+/* 订单指标网格 */
+.orderMetricsGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-3);
+  padding: var(--spacing-4) var(--spacing-5);
+  border-bottom: 1px solid var(--color-border-light);
+  background: var(--color-bg-tertiary);
+}
+
+@media (max-width: 768px) {
+  .orderMetricsGrid {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-2);
+  }
+}
+
+/* 订单图表网格 */
+.orderChartsGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-4);
+  padding: var(--spacing-4) var(--spacing-5);
+}
+
+@media (max-width: 768px) {
+  .orderChartsGrid {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-3);
+  }
+}
+
+/* 图表卡片 */
+.chartCard {
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  border: 1px solid var(--color-border-light);
+}
+
+.chartTitle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-4) var(--spacing-5);
+  border-bottom: 1px solid var(--color-border-light);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+/* 最后更新时间 */
+.lastUpdated {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  margin-bottom: var(--spacing-4);
+  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+/* 头部操作区 */
+.headerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+}
+
+/* 周期选择器 */
+.periodSelector {
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* 增长率样式 */
+.growth {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-xs);
+}
+
+.growth.up {
+  color: var(--color-trend-up);
+}
+
+.growth.down {
+  color: var(--color-trend-down);
+}
+
+/* 响应式断点 */
+@media (max-width: 768px) {
+  .chartWrapper {
+    min-height: 260px;
+  }
+  
+  .sectionHeader {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-3);
+  }
+  
+  .orderMetricsGrid {
+    grid-template-columns: 1fr;
+  }
+  
+  .orderChartsGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 空状态 */
+.emptyState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-base);
+}

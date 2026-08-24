@@ -1,0 +1,15 @@
+.alertConfigForm {
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-6);
+  box-shadow: var(--shadow-md);
+}
+
+.alertConfigForm .ant-form-item {
+  margin-bottom: var(--spacing-5);
+}
+
+.alertConfigForm .ant-form-item-label > label {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}

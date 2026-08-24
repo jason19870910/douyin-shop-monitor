@@ -1,0 +1,50 @@
+# -*- coding: utf-8 -*-
+import os
+import requests
+from flask import Flask, jsonify
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+COOKIE = os.getenv('COOKIE', '')
+ORDERS_URL = os.getenv('ORDERS_URL') or 'https://httpbin.org/get'
+
+app = Flask(__name__)
+
+# ------------------- 真实订单接口 -------------------
+@app.route('/api/orders')
+def orders():
+    try:
+        headers = {'Cookie': COOKIE,
+                   'User-Agent': 'Mozilla/5.0 (compatible; DouyinMonitor/1.0)'}
+        resp = requests.get(ORDERS_URL, headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        return jsonify({'data': data, 'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ------------------- 占位接口（符合技术文档） -------------------
+@app.route('/api/shop-stats')
+def shop_stats():
+    return jsonify({'data': {}, 'success': True})
+
+@app.route('/api/creator')
+def creator():
+    return jsonify({'data': {}, 'success': True})
+
+@app.route('/api/compass')
+def compass():
+    return jsonify({'data': {}, 'success': True})
+
+@app.route('/api/products')
+def products():
+    return jsonify({'data': {}, 'success': True})
+
+# ------------------- 健康检查 -------------------
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok'}), 200
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)

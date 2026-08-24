@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  python-service:
+    build:
+      context: ./doudian_monitor
+      dockerfile: Dockerfile.python
+    container_name: doudian_monitor
+    restart: unless-stopped
+    environment:
+      - ENV_FILE=.env
+    volumes:
+      - ./doudian_monitor/.env:/app/.env:ro
+      - ./doudian_monitor/logs:/app/logs
+    ports:
+      - "127.0.0.1:5000:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  node-service:
+    build:
+      context: ./douyin-auto-publish
+      dockerfile: Dockerfile.node
+    container_name: douyin_auto_publish
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    volumes:
+      - ./douyin-auto-publish/.env:/app/.env:ro
+      - ./douyin-auto-publish/logs:/app/logs
+      - ./douyin-auto-publish/uploads:/app/uploads
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health',(r)=>{if(r.statusCode!==200)process.exit(1)})"]
+      interval: 30s
+      timeout: 3s
+      retries: 3

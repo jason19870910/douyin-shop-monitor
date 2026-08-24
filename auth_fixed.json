@@ -1,0 +1,10 @@
+{
+  "redirect_uri": "https://wlkj-tech.cn/oauth/callback",
+  "douyin_app_id": "aw370towtp6bg82b",
+  "douyin_app_secret": "a4fae3b38c0b1ee982c849fb3b23b353",
+  "authorized": false,
+  "access_token": "",
+  "refresh_token": "",
+  "expires_at": 0,
+  "scope": []
+}
