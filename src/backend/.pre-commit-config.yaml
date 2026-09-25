@@ -1,0 +1,72 @@
+# See https://pre-commit.com for more information
+repos:
+  # Python formatting & linting
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        args: [--line-length=100]
+        types: [python]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.4
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        types: [python]
+
+  # Type checking
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy type check
+        entry: mypy
+        language: system
+        types: [python]
+        pass_filenames: false
+        args: ["--config-file=pyproject.toml", "app.py", "config.py", "tools/", "tests/"]
+
+  # Security
+  - repo: https://github.com/pycqa/bandit
+    rev: 1.7.8
+    hooks:
+      - id: bandit
+        args: ["-r", ".", "-x", "tests", "--skip", "B101,B601"]
+        types: [python]
+
+  # Secrets detection
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: package-lock.json
+
+  # General checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: debug-logger
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: destroyed-symlinks
+
+  # Frontend (if node available)
+  - repo: local
+    hooks:
+      - id: frontend-lint
+        name: Frontend lint & format check
+        entry: bash -c 'cd src/frontend && npx eslint src/ --format=compact && npx prettier --check "src/**/*.{js,jsx,ts,tsx,json,css,md}"'
+        language: system
+        types: [javascript, typescript, tsx, jsx, json, css, md]
+        pass_filenames: false
+        always_run: false

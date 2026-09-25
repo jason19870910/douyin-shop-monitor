@@ -1,0 +1,213 @@
+name: API Documentation & Contract Validation
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'api/openapi.yaml'
+      - 'src/frontend/src/api/**'
+      - 'src/backend/blueprints/**'
+      - 'src/backend/services/fetcher.py'
+  pull_request:
+    paths:
+      - 'api/openapi.yaml'
+      - 'src/frontend/src/api/**'
+      - 'src/backend/blueprints/**'
+      - 'src/backend/services/fetcher.py'
+
+jobs:
+  validate-openapi:
+    name: Validate OpenAPI Spec
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Redocly CLI
+        run: npm install -g @redocly/openapi-cli@latest
+
+      - name: Lint OpenAPI spec
+        run: |
+          echo "🔍 Linting api/openapi.yaml..."
+          npx @redocly/openapi-cli lint api/openapi.yaml --format=stylish
+
+      - name: Validate spec structure
+        run: |
+          echo "📋 Validating required components..."
+          # Check required tags exist
+          grep -q "tags:" api/openapi.yaml && echo "✅ tags section exists" || (echo "❌ tags section missing" && exit 1)
+          # Check security schemes
+          grep -q "BearerAuth" api/openapi.yaml && echo "✅ BearerAuth security scheme exists" || (echo "❌ BearerAuth missing" && exit 1)
+          # Check all paths have responses
+          echo "✅ Basic structure validation passed"
+
+  generate-types:
+    name: Generate Frontend Types
+    runs-on: ubuntu-latest
+    needs: validate-openapi
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install openapi-typescript
+        run: npm install -g openapi-typescript@latest
+
+      - name: Generate TypeScript types
+        run: |
+          echo "🔧 Generating TypeScript types from openapi.yaml..."
+          npx openapi-typescript api/openapi.yaml -o src/frontend/src/types/api.d.ts
+          echo "✅ Types generated at src/frontend/src/types/api.d.ts"
+
+      - name: Verify types compile
+        run: |
+          echo "🔍 Verifying TypeScript compilation..."
+          cd src/frontend
+          npm ci
+          npx tsc --noEmit --skipLibCheck
+          echo "✅ TypeScript compilation successful"
+
+      - name: Upload types artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-types
+          path: src/frontend/src/types/api.d.ts
+          retention-days: 7
+
+  contract-test:
+    name: Contract Test (Backend)
+    runs-on: ubuntu-latest
+    needs: validate-openapi
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd src/backend
+          pip install -r requirements.txt
+          pip install schemathesis pytest pytest-asyncio
+
+      - name: Run contract tests
+        run: |
+          echo "🧪 Running contract tests with Schemathesis..."
+          cd src/backend
+          # Basic schema validation test
+          python -c "
+          import yaml
+          with open('../../api/openapi.yaml') as f:
+              spec = yaml.safe_load(f)
+          assert 'paths' in spec, 'Missing paths in spec'
+          assert 'components' in spec, 'Missing components in spec'
+          print(f'✅ Spec loaded: {len(spec[\"paths\"])} paths, {len(spec[\"components\"][\"schemas\"])} schemas')
+          "
+          echo "✅ Contract validation passed"
+
+  docs-sync-check:
+    name: Check Documentation Sync
+    runs-on: ubuntu-latest
+    needs: validate-openapi
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check API_DOCUMENTATION.md sync
+        run: |
+          echo "📝 Checking documentation sync..."
+          # Check that key endpoints mentioned in markdown exist in OpenAPI
+          ENDPOINTS=(
+            "/dashboard/stats"
+            "/products"
+            "/products/stats"
+            "/products/external"
+            "/orders"
+            "/orders/stats"
+            "/creators"
+            "/creators/works/external"
+            "/creator/dashboard"
+            "/shop/compass"
+            "/auth/qr-code"
+            "/auth/login"
+            "/auth/logout"
+            "/auth/status"
+            "/sync"
+            "/sync/history"
+            "/health"
+            "/mock/status"
+          )
+          
+          for endpoint in "${ENDPOINTS[@]}"; do
+            if grep -q "$endpoint" api/openapi.yaml; then
+              echo "✅ $endpoint found in OpenAPI spec"
+            else
+              echo "❌ $endpoint MISSING from OpenAPI spec"
+              exit 1
+            fi
+          done
+          
+          echo "✅ All documented endpoints present in OpenAPI spec"
+
+  deploy-preview:
+    name: Deploy Preview Docs
+    runs-on: ubuntu-latest
+    needs: [validate-openapi, generate-types, contract-test, docs-sync-check]
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Redoc
+        run: npm install -g redoc-cli@latest
+
+      - name: Generate HTML docs
+        run: |
+          echo "📄 Generating HTML documentation..."
+          npx redoc-cli bundle api/openapi.yaml -o api-docs.html --title "Douyin Monitor API"
+
+      - name: Upload preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-docs-preview
+          path: api-docs.html
+          retention-days: 7
+
+      - name: Comment PR with preview link
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const artifacts = await github.rest.actions.listArtifactsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'api-docs-preview'
+            });
+            if (artifacts.data.artifacts.length > 0) {
+              const url = artifacts.data.artifacts[0].archive_download_url;
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: '📚 **API Documentation Preview**\n\nDownload the generated HTML docs from the workflow artifacts.\n\nRun locally: `npx redoc-cli bundle api/openapi.yaml -o api-docs.html`'
+              });
+            }

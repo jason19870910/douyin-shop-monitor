@@ -1,0 +1,30 @@
+version: "3.8"
+
+# Production override - uses pre-built images from registry
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  monitor:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-douyin}/monitor:latest
+    build: null
+    env_file:
+      - ./config/.env
+
+  celery_worker:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-douyin}/monitor:latest
+    build: null
+    env_file:
+      - ./config/.env
+
+  celery_beat:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-douyin}/monitor:latest
+    build: null
+    env_file:
+      - ./config/.env
+
+  frontend:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-douyin}/frontend:latest
+    build: null
+
+  nginx:
+    image: docker.1ms.run/nginx:alpine

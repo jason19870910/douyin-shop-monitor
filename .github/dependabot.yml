@@ -1,0 +1,94 @@
+version: 2
+updates:
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # Python (backend)
+  - package-ecosystem: "pip"
+    directory: "/src/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "deps(python)"
+    groups:
+      backend-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      security-updates:
+        patterns: ["*"]
+        update-types: ["security"]
+
+  # Python (monitor service)
+  - package-ecosystem: "pip"
+    directory: "/opt/douyin-platform/apps/monitor"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    labels:
+      - "dependencies"
+      - "python"
+      - "monitor"
+    commit-message:
+      prefix: "deps(monitor)"
+
+  # Node.js (frontend)
+  - package-ecosystem: "npm"
+    directory: "/src/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    labels:
+      - "dependencies"
+      - "frontend"
+    commit-message:
+      prefix: "deps(frontend)"
+    groups:
+      frontend-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      security-updates:
+        patterns: ["*"]
+        update-types: ["security"]
+
+  # Docker
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "ci(docker)"
+
+# Allow dependabot to use secrets for private registries
+# (if you have private packages)
+# registries:
+#   my-private-registry:
+#     type: docker-registry
+#     url: registry.example.com
+#     username: ${{ secrets.REGISTRY_USERNAME }}
+#     password: ${{ secrets.REGISTRY_PASSWORD }}

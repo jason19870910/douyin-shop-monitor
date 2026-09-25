@@ -1,0 +1,18 @@
+[Unit]
+Description=Douyin Auto Publish & Shop Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/douyin-auto-publish
+Environment=NODE_ENV=production
+Environment="DATA_SOURCE_API_URL=http://127.0.0.1:5000"
+ExecStart=/usr/bin/node src/server/index.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

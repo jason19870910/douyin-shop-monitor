@@ -1,0 +1,503 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.2.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  FRONTEND_DIR: src/frontend
+  BACKEND_DIR: src/backend
+  MONITOR_DIR: opt/douyin-platform/apps/monitor
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '20'
+
+jobs:
+  # ==========================================
+  # 1. Validate & Build
+  # ==========================================
+  validate-and-build:
+    name: Validate & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.extract-version.outputs.version }}
+      tag: ${{ steps.extract-version.outputs.tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: extract-version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            TAG="${{ github.event.inputs.version }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION=${TAG#v}
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Releasing version: $VERSION (tag: $TAG)"
+
+      - name: Validate version format
+        run: |
+          if ! [[ "${{ steps.extract-version.outputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+            echo "❌ Invalid version format: ${{ steps.extract-version.outputs.version }}"
+            echo "Expected format: X.Y.Z or X.Y.Z-suffix (e.g., 1.2.0, 1.2.0-beta.1)"
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ${{ env.FRONTEND_DIR }}/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm run build
+
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: ${{ env.FRONTEND_DIR }}/build/
+          retention-days: 7
+
+      - name: Build Docker images
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ env.BACKEND_DIR }}
+          file: ./${{ env.BACKEND_DIR }}/Dockerfile
+          push: false
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:${{ steps.extract-version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:latest
+          load: true
+
+      - name: Build monitor Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ env.MONITOR_DIR }}
+          file: ./${{ env.MONITOR_DIR }}/Dockerfile
+          push: false
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/monitor:${{ steps.extract-version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/monitor:latest
+          load: true
+
+      - name: Save Docker images
+        run: |
+          docker save ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:${{ steps.extract-version.outputs.version }} | gzip > backend-image.tar.gz
+          docker save ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/monitor:${{ steps.extract-version.outputs.version }} | gzip > monitor-image.tar.gz
+
+      - name: Upload Docker images
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-images
+          path: |
+            backend-image.tar.gz
+            monitor-image.tar.gz
+          retention-days: 7
+
+  # ==========================================
+  # 2. Run Tests (reuse CI artifacts)
+  # ==========================================
+  test-release:
+    name: Release Tests
+    runs-on: ubuntu-latest
+    needs: validate-and-build
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: ${{ env.BACKEND_DIR }}/requirements-dev.txt
+
+      - name: Install backend dependencies
+        working-directory: ${{ env.BACKEND_DIR }}
+        run: pip install -r requirements-dev.txt
+
+      - name: Run backend unit tests
+        working-directory: ${{ env.BACKEND_DIR }}
+        run: python -m pytest ../tests/backend/unit/ -v -m "unit" --tb=short
+
+      - name: Run backend integration tests
+        working-directory: ${{ env.BACKEND_DIR }}
+        env:
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          # Start redis for integration tests
+          docker run -d --name redis-test -p 6379:6379 redis:7-alpine
+          sleep 2
+          python -m pytest ../tests/backend/integration/ -v -m "integration" --tb=short
+          docker stop redis-test
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ${{ env.FRONTEND_DIR }}/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm ci
+
+      - name: Run frontend tests
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npx vitest run
+
+  # ==========================================
+  # 3. Push Docker Images
+  # ==========================================
+  push-images:
+    name: Push Docker Images
+    runs-on: ubuntu-latest
+    needs: [validate-and-build, test-release]
+    timeout-minutes: 20
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Download Docker images
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images
+          path: ./images
+
+      - name: Load Docker images
+        run: |
+          docker load < ./images/backend-image.tar.gz
+          docker load < ./images/monitor-image.tar.gz
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push backend image
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:${{ needs.validate-and-build.outputs.version }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:latest
+
+      - name: Push monitor image
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/monitor:${{ needs.validate-and-build.outputs.version }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/monitor:latest
+
+  # ==========================================
+  # 4. Generate Changelog
+  # ==========================================
+  changelog:
+    name: Generate Changelog
+    runs-on: ubuntu-latest
+    needs: validate-and-build
+    timeout-minutes: 10
+    outputs:
+      changelog: ${{ steps.generate.outputs.changelog }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: generate
+        uses: mikepenz/release-changelog-builder-action@v4
+        with:
+          configuration: |
+            {
+              "template": "# {{CHANGELOG}}\n\n## Changes in ${{ needs.validate-and-build.outputs.version }}\n\n### Features\n{{FEATURES}}\n\n### Bug Fixes\n{{FIXES}}\n\n### Documentation\n{{DOCUMENTATION}}\n\n### Refactoring\n{{REFACTORING}}\n\n### Tests\n{{TESTS}}\n\n### Chores\n{{CHORES}}",
+              "categories": [
+                {"title": "🚀 Features", "labels": ["feature", "feat", "enhancement"]},
+                {"title": "🐛 Bug Fixes", "labels": ["bug", "fix", "bugfix"]},
+                {"title": "📚 Documentation", "labels": ["docs", "documentation"]},
+                {"title": "♻️ Refactoring", "labels": ["refactor", "refactoring"]},
+                {"title": "✅ Tests", "labels": ["test", "tests"]},
+                {"title": "🔧 Chores", "labels": ["chore", "maintenance", "ci", "build"]}
+              ],
+              "excludeLabels": ["skip-changelog", "ignore-for-release"]
+            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ==========================================
+  # 5. Create GitHub Release
+  # ==========================================
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [validate-and-build, test-release, push-images, changelog]
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate-and-build.outputs.tag }}
+          name: Release ${{ needs.validate-and-build.outputs.tag }}
+          body: ${{ needs.changelog.outputs.changelog }}
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease || false }}
+          generate_release_notes: false
+          files: |
+            ./images/backend-image.tar.gz
+            ./images/monitor-image.tar.gz
+          make_latest: true
+
+  # ==========================================
+  # 6. Deploy to Production (manual approval)
+  # ==========================================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [validate-and-build, test-release, push-images, create-release]
+    timeout-minutes: 30
+    environment: production
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+
+      - name: Verify server connection
+        run: |
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "echo 'SSH connection successful'"
+
+      - name: Prepare deployment directory
+        env:
+          DEPLOY_PATH: /opt/douyin-platform
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
+              mkdir -p ${{ env.DEPLOY_PATH }}/nginx/conf.d
+              mkdir -p ${{ env.DEPLOY_PATH }}/nginx/certbot/conf
+              mkdir -p ${{ env.DEPLOY_PATH }}/nginx/certbot/www
+              mkdir -p ${{ env.DEPLOY_PATH }}/opt/douyin-platform/apps/monitor/secrets
+            "
+
+      - name: Copy docker-compose.yml to server
+        run: |
+          scp -o StrictHostKeyChecking=no \
+            docker-compose.yml \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/douyin-platform/docker-compose.yml
+
+      - name: Copy nginx configuration
+        run: |
+          scp -o StrictHostKeyChecking=no \
+            nginx/nginx.conf \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/douyin-platform/nginx/nginx.conf
+          scp -o StrictHostKeyChecking=no \
+            nginx/conf.d/wlkj-tech.cn.conf \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/douyin-platform/nginx/conf.d/wlkj-tech.cn.conf
+
+      - name: Create .env on server from secrets
+        env:
+          DEPLOY_PATH: /opt/douyin-platform
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
+              cat > ${{ env.DEPLOY_PATH }}/opt/douyin-platform/apps/monitor/.env << 'EOF'
+# Monitor Service Environment Variables
+ALERT_EMAIL=${{ secrets.ALERT_EMAIL }}
+API_AUTH_TOKEN=${{ secrets.API_AUTH_TOKEN }}
+FXG_BASE_URL=https://fxg.jinritemai.com
+CREATOR_BASE_URL=https://creator.douyin.com
+SCHEDULE_INTERVAL_MINUTES=60
+USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+CELERY_BROKER_URL=redis://redis:6379/0
+CELERY_RESULT_BACKEND=redis://redis:6379/0
+DATA_DIR=/data
+PYTHONDONTWRITEBYTECODE=1
+PYTHONUNBUFFERED=1
+OAUTH_REDIRECT_URI=https://wlkj-tech.cn/api/v1/auth/callback
+DOUYIN_SCOPE=user_info
+EOF
+            "
+
+      - name: Copy secret files to server
+        env:
+          DEPLOY_PATH: /opt/douyin-platform
+        run: |
+          SECRETS=(
+            "douyin_app_id"
+            "douyin_app_secret"
+            "douyin_access_token"
+            "fxg_cookies"
+            "creator_cookies"
+            "token"
+            "ms_token"
+            "a_bogus"
+            "verify_fp"
+            "fp"
+            "fxg_shop_id"
+            "fxg_log_id"
+            "api_key"
+          )
+          
+          for secret in "${SECRETS[@]}"; do
+            secret_var=$(echo "$secret" | tr '[:lower:]' '[:upper:]')
+            secret_value="${{ secrets.$secret_var }}"
+            if [ -n "$secret_value" ]; then
+              ssh -o StrictHostKeyChecking=no \
+                ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
+                  echo '$secret_value' > ${{ env.DEPLOY_PATH }}/opt/douyin-platform/apps/monitor/secrets/${secret}.txt
+                  chmod 600 ${{ env.DEPLOY_PATH }}/opt/douyin-platform/apps/monitor/secrets/${secret}.txt
+                "
+            else
+              echo "Warning: Secret $secret_var not set in GitHub secrets"
+            fi
+          done
+
+      - name: Deploy with version tag
+        env:
+          DEPLOY_PATH: /opt/douyin-platform
+          VERSION: ${{ needs.validate-and-build.outputs.version }}
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
+              cd ${{ env.DEPLOY_PATH }}
+              
+              # Update image tags in docker-compose.yml
+              sed -i \"s|ghcr.io/[^/]*/monitor:.*|ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/monitor:${VERSION}|\" docker-compose.yml
+              sed -i \"s|ghcr.io/[^/]*/frontend:.*|ghcr.io/${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:${VERSION}|\" docker-compose.yml
+              
+              # Pull new images
+              docker compose pull
+              
+              # Deploy with zero-downtime
+              docker compose up -d --remove-orphans
+              
+              # Wait for health checks
+              sleep 30
+              
+              # Verify services
+              docker compose ps
+            "
+
+      - name: Verify deployment health
+        env:
+          DEPLOY_PATH: /opt/douyin-platform
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
+              # Check monitor health
+              for i in {1..10}; do
+                if curl -sf http://localhost:5000/api/v1/health > /dev/null; then
+                  echo 'Monitor API: HEALTHY'
+                  break
+                fi
+                echo 'Waiting for monitor API...'
+                sleep 5
+              done
+              
+              # Check frontend health
+              for i in {1..10}; do
+                if curl -sf http://localhost/health > /dev/null; then
+                  echo 'Frontend: HEALTHY'
+                  break
+                fi
+                echo 'Waiting for frontend...'
+                sleep 5
+              done
+              
+              # Check HTTPS
+              if curl -sf https://wlkj-tech.cn/health > /dev/null; then
+                echo 'HTTPS: HEALTHY'
+              else
+                echo 'Warning: HTTPS check failed'
+              fi
+            "
+
+      - name: Cleanup old images
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
+              docker image prune -f
+              docker builder prune -f
+            "
+
+  # ==========================================
+  # 7. Notify
+  # ==========================================
+  notify:
+    name: Notify Release Result
+    runs-on: ubuntu-latest
+    needs: [create-release, deploy-production]
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - name: Determine status
+        id: status
+        run: |
+          RELEASE_STATUS="${{ needs.create-release.result }}"
+          DEPLOY_STATUS="${{ needs.deploy-production.result }}"
+          
+          if [ "$RELEASE_STATUS" = "success" ] && [ "$DEPLOY_STATUS" = "success" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=✅ Release ${{ needs.validate-and-build.outputs.tag }} deployed successfully!" >> $GITHUB_OUTPUT
+          elif [ "$RELEASE_STATUS" = "success" ] && [ "$DEPLOY_STATUS" != "success" ]; then
+            echo "status=partial" >> $GITHUB_OUTPUT
+            echo "message=⚠️ Release ${{ needs.validate-and-build.outputs.tag }} created but deployment failed!" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "message=❌ Release ${{ needs.validate-and-build.outputs.tag }} failed!" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send notification
+        run: |
+          echo "${{ steps.status.outputs.message }}"
+          
+          # Example: Send to webhook (uncomment and configure)
+          # curl -X POST -H 'Content-type: application/json' \
+          #   --data "{\"text\":\"${{ steps.status.outputs.message }}\"}" \
+          #   ${{ secrets.WEBHOOK_URL }}
+
+      - name: Comment on release (if failure)
+        if: steps.status.outputs.status != 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: ${{ needs.create-release.outputs.release_id }},
+              name: 'DEPLOYMENT_FAILED.txt',
+              data: 'Deployment failed. Check workflow logs for details.',
+              content_type: 'text/plain'
+            })

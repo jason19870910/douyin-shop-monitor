@@ -3,30 +3,27 @@ import os
 import json
 import logging
 import logging.config
-import yaml
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
+from urllib.parse import parse_qs, urlparse
+
+import yaml
 from flask import Flask, request
 from flask_cors import CORS
-
-# Load environment variables
 from dotenv import load_dotenv
+
 load_dotenv()
 
-# Import config
 from config import Config
-
-# Import services
 from services.fetcher import (
-    load_all_data, 
-    save_all_data, 
+    load_all_data,
+    save_all_data,
     scheduled_job,
     cache,
     CACHE_KEYS,
+    fetch_and_store_creator_works,
 )
-
-# Import blueprints
 from blueprints import (
     products_bp,
     orders_bp,
@@ -40,30 +37,115 @@ from blueprints import (
     dashboard_bp,
     frontend_bp,
 )
-
-# Import response helpers
 from utils.responses import unauthorized_response
 
-# Configure logging from YAML file
+
 def setup_logging():
     """Load logging configuration from YAML file."""
     log_config_path = Path(__file__).parent / 'logging.yaml'
     if log_config_path.exists():
         with open(log_config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+            config = yaml.safe_load(f) or {}
+        for handler in config.get('handlers', {}).values():
+            filename = handler.get('filename')
+            if filename:
+                log_path = Path(filename)
+                if not log_path.is_absolute():
+                    log_path = (Path(__file__).parent / log_path).resolve()
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                handler['filename'] = str(log_path)
         logging.config.dictConfig(config)
     else:
-        # Fallback to basic config if YAML not found
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
 
+
 setup_logging()
 logger = logging.getLogger(__name__)
 
+SKIP_AUTH = os.getenv('SKIP_AUTH', 'false').lower() == 'true'
+
 app = Flask(__name__, static_folder='frontend/build/static', static_url_path='/static')
-CORS(app)
+CORS(app, resources={
+    r"/api/*": {
+        "origins": os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    }
+})
+
+
+def parse_cookie(cookie_value: Optional[str]) -> str:
+    """兼容旧版接口：将 Cookie 字符串或 Cookie 文件转换为标准字符串。"""
+    if cookie_value is None:
+        return ""
+
+    cookie_value = str(cookie_value).strip()
+    if not cookie_value:
+        return ""
+
+    cookie_path = Path(cookie_value)
+    if cookie_path.exists() and cookie_path.is_file():
+        try:
+            text = cookie_path.read_text(encoding='utf-8')
+        except OSError:
+            return cookie_value
+        if '\t' in text:
+            cookies = []
+            for line in text.splitlines():
+                parts = [part.strip() for part in line.split('\t')]
+                if len(parts) >= 7 and parts[5] and parts[6]:
+                    cookies.append(f"{parts[5]}={parts[6]}")
+            return '; '.join(cookies)
+        return text.strip()
+
+    if '\n' in cookie_value and '\t' in cookie_value:
+        cookies = []
+        for line in cookie_value.splitlines():
+            parts = [part.strip() for part in line.split('\t')]
+            if len(parts) >= 7 and parts[5] and parts[6]:
+                cookies.append(f"{parts[5]}={parts[6]}")
+        return '; '.join(cookies)
+
+    return cookie_value
+
+
+def extract_csrf_token(url: str) -> str:
+    """从 URL 中提取 __token / token 参数。"""
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        for key in ('__token', 'token', 'csrf_token'):
+            values = params.get(key)
+            if values:
+                return values[0]
+    except Exception:
+        return ""
+    return ""
+
+
+def build_product_headers(url: str) -> Dict[str, str]:
+    """构建抖店请求头，兼容旧代码和测试。"""
+    parsed = urlparse(url)
+    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else "https://fxg.jinritemai.com"
+    referer = f"{origin}/" if origin else "https://fxg.jinritemai.com/"
+    cookie = os.getenv('COOKIE', '')
+    token = extract_csrf_token(url) or os.getenv('CREATOR_CSRF_TOKEN', '')
+
+    return {
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'zh-CN,zh;q=0.9',
+        'cookie': cookie,
+        'origin': origin,
+        'referer': referer,
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+        'x-csrf-token': token,
+        'x-secsdk-csrf-token': token,
+        'x-requested-with': 'XMLHttpRequest',
+    }
+
 
 # Flasgger / Swagger UI（可选，未安装时跳过）
 try:
@@ -96,44 +178,47 @@ except ImportError:
     logger.warning("flasgger not installed, Swagger UI disabled")
 
 
-# Authentication middleware
 PUBLIC_ENDPOINTS = {
     '/api/v1/health',
     '/api/v1/sync',
     '/api/v1/auth/login',
     '/api/v1/auth/callback',
     '/api/v1/auth/qr-code',
-    '/api/v1/auth/status',  # Allow checking auth status without auth
+    '/api/v1/auth/status',
+    '/api/v1/mock/status',
+    '/api/v1/dashboard/stats',
 }
 
 
 @app.before_request
 def check_auth():
     """Check authentication for all API requests."""
-    # Skip for OPTIONS (CORS preflight)
+    if SKIP_AUTH:
+        return
+
     if request.method == 'OPTIONS':
         return
-    
-    # Skip for public endpoints
+
     if request.path in PUBLIC_ENDPOINTS:
         return
-    
-    # Skip for static files and frontend
+
     if request.path.startswith('/static/') or request.path == '/' or request.path.startswith('/favicon'):
         return
-    
-    # Only check auth for /api/v1/ paths
+
+    api_key = (Config.API_KEY or '').strip()
+    if not api_key:
+        return unauthorized_response('Server API key is not configured')
+
     if request.path.startswith('/api/v1/'):
         auth_header = request.headers.get('Authorization', '')
         if not auth_header.startswith('Bearer '):
             return unauthorized_response('Missing or invalid Authorization header')
-        
-        token = auth_header[7:]  # Remove 'Bearer ' prefix
-        if token != Config.API_KEY:
+
+        token = auth_header[7:]
+        if token != api_key:
             return unauthorized_response('Invalid API key')
 
 
-# Register blueprints
 app.register_blueprint(products_bp)
 app.register_blueprint(orders_bp)
 app.register_blueprint(creators_bp)
@@ -146,7 +231,6 @@ app.register_blueprint(alerts_bp)
 app.register_blueprint(dashboard_bp)
 app.register_blueprint(frontend_bp)
 
-# Load data at module level so it runs with gunicorn
 load_all_data()
 logger.info("Application started (Celery Beat handles scheduling)")
 

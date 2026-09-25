@@ -1,0 +1,329 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  FRONTEND_DIR: opt/douyin-platform/apps/monitor/frontend
+  MONITOR_DIR: opt/douyin-platform/apps/monitor
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+  DEPLOY_PATH: /opt/douyin-platform
+
+jobs:
+  # ==========================================
+  # Build & Push Docker Images
+  # ==========================================
+  build-and-push:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      monitor-image: ${{ steps.meta-monitor.outputs.tags }}
+      frontend-image: ${{ steps.meta-frontend.outputs.tags }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for monitor
+        id: meta-monitor
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/monitor
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push monitor image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ env.MONITOR_DIR }}
+          file: ./${{ env.MONITOR_DIR }}/Dockerfile
+          push: true
+          tags: ${{ steps.meta-monitor.outputs.tags }}
+          labels: ${{ steps.meta-monitor.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract metadata for frontend
+        id: meta-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ env.FRONTEND_DIR }}
+          file: ./${{ env.FRONTEND_DIR }}/Dockerfile
+          push: true
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ==========================================
+  # Deploy to Production Server
+  # ==========================================
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+
+      - name: Verify server connection
+        run: |
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+            ${{ env.SERVER_USER }}@${{ env.SERVER_HOST }} "echo 'SSH connection successful'"
+
+      - name: Prepare deployment directory on server
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ env.SERVER_USER }}@${{ env.SERVER_HOST }} "
+              mkdir -p ${{ env.DEPLOY_PATH }}/opt/douyin-platform/apps/monitor
+              mkdir -p ${{ env.DEPLOY_PATH }}/nginx/conf.d
+              mkdir -p ${{ env.DEPLOY_PATH }}/nginx/certbot/conf
+              mkdir -p ${{ env.DEPLOY_PATH }}/nginx/certbot/www
+              mkdir -p ${{ env.DEPLOY_PATH }}/opt/douyin-platform/apps/monitor/secrets
+            "
+
+      - name: Copy docker-compose.yml to server
+        run: |
+          scp -o StrictHostKeyChecking=no \
+            docker-compose.yml \
+            ${{ env.SERVER_USER }}@${{ env.SERVER_HOST }}:${{ env.DEPLOY_PATH }}/docker-compose.yml
+
+      - name: Copy nginx configuration to server
+        run: |
+          scp -o StrictHostKeyChecking=no \
+            nginx/nginx.conf \
+            ${{ env.SERVER_USER }}@${{ env.SERVER_HOST }}:${{ env.DEPLOY_PATH }}/nginx/nginx.conf
+          scp -o StrictHostKeyChecking=no \
+            nginx/conf.d/wlkj-tech.cn.conf \
+            ${{ env.SERVER_USER }}@${{ env.SERVER_HOST }}:${{ env.DEPLOY_PATH }}/nginx/conf.d/wlkj-tech.cn.conf
+
+      - name: Copy monitor .env to server
+        run: |
+          # Create .env on server from GitHub secrets
+          ssh -o StrictHostKeyChecking=no \
+            ${{ env.SERVER_USER }}@${{ env.SERVER_HOST }} "
+              cat > ${{ env.DEPLOY_PATH }}/opt/douyin-platform/apps/monitor/.env << 'EOF'
+  # Monitor Service Environment Variables
+  ALERT_EMAIL=${{ secrets.ALERT_EMAIL }}
+  API_AUTH_TOKEN=${{ secrets.API_AUTH_TOKEN }}
+  FXG_BASE_URL=https://fxg.jinritemai.com
+  CREATOR_BASE_URL=https://creator.douyin.com
+  SCHEDULE_INTERVAL_MINUTES=60
+  USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36
+  CELERY_BROKER_URL=redis://redis:6379/0
+  CELERY_RESULT_BACKEND=redis://redis:6379/0
+  DATA_DIR=/data
+  PYTHONDONTWRITEBYTECODE=1
+  PYTHONUNBUFFERED=1
+  EOF
+            "
+
+      - name: Copy secret files to server
+        run: |
+          # Copy all secret files from GitHub secrets
+          SECRETS=(
+            "douyin_app_id"
+            "douyin_app_secret"
+            "douyin_access_token"
+            "fxg_cookies"
+            "creator_cookies"
+            "token"
+            "ms_token"
+            "a_bogus"
+            "verify_fp"
+            "fp"
+            "fxg_shop_id"
+            "fxg_log_id"
+            "api_key"
+          )
+          
+          for secret in "${SECRETS[@]}"; do
+            secret_var=$(echo "$secret" | tr '[:lower:]' '[:upper:]')
+            secret_value="${{ secrets.$secret_var }}"
+            if [ -n "$secret_value" ]; then
+              ssh -o StrictHostKeyChecking=no \
+                ${{ env.SERVER_USER }}@${{ env.SERVER_HOST }} "
+                  echo '$secret_value' > ${{ env.DEPLOY_PATH }}/opt/douyin-platform/apps/monitor/secrets/${secret}.txt
+                  chmod 600 ${{ env.DEPLOY_PATH }}/opt/douyin-platform/apps/monitor/secrets/${secret}.txt
+                "
+            else
+              echo "Warning: Secret $secret_var not set in GitHub secrets"
+            fi
+          done
+
+      - name: Pull latest images on server
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ env.SERVER_USER }}@${{ env.SERVER_HOST }} "
+              cd ${{ env.DEPLOY_PATH }}
+              docker compose pull
+            "
+
+      - name: Deploy with zero-downtime
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ env.SERVER_USER }}@${{ env.SERVER_HOST }} "
+              cd ${{ env.DEPLOY_PATH }}
+              
+              # Start new containers
+              docker compose up -d --remove-orphans
+              
+              # Wait for health checks
+              sleep 30
+              
+              # Verify services are healthy
+              docker compose ps
+            "
+
+      - name: Verify deployment health
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ env.SERVER_USER }}@${{ env.SERVER_HOST }} "
+              # Check monitor health
+              for i in {1..10}; do
+                if curl -sf http://localhost:5000/api/v1/health > /dev/null; then
+                  echo 'Monitor API: HEALTHY'
+                  break
+                fi
+                echo 'Waiting for monitor API...'
+                sleep 5
+              done
+              
+              # Check frontend health
+              for i in {1..10}; do
+                if curl -sf http://localhost/health > /dev/null; then
+                  echo 'Frontend: HEALTHY'
+                  break
+                fi
+                echo 'Waiting for frontend...'
+                sleep 5
+              done
+              
+              # Check HTTPS
+              if curl -sf https://wlkj-tech.cn/health > /dev/null; then
+                echo 'HTTPS: HEALTHY'
+              else
+                echo 'Warning: HTTPS check failed'
+              fi
+            "
+
+      - name: Cleanup old Docker images
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ env.SERVER_USER }}@${{ env.SERVER_HOST }} "
+              docker image prune -f
+              docker builder prune -f
+            "
+
+  # ==========================================
+  # Rollback on Failure
+  # ==========================================
+  rollback:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: failure()
+    steps:
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+
+      - name: Rollback to previous images
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ env.SERVER_USER }}@${{ env.SERVER_HOST }} "
+              cd ${{ env.DEPLOY_PATH }}
+              
+              # Get previous image tags
+              PREV_MONITOR=\$(docker images --format '{{.Repository}}:{{.Tag}}' | grep monitor | head -2 | tail -1)
+              PREV_FRONTEND=\$(docker images --format '{{.Repository}}:{{.Tag}}' | grep frontend | head -2 | tail -1)
+              
+              if [ -n \"\$PREV_MONITOR\" ] && [ -n \"\$PREV_FRONTEND\" ]; then
+                echo \"Rolling back to: \$PREV_MONITOR and \$PREV_FRONTEND\"
+                docker tag \$PREV_MONITOR \${REGISTRY}/${{ env.IMAGE_NAME }}/monitor:latest
+                docker tag \$PREV_FRONTEND \${REGISTRY}/${{ env.IMAGE_NAME }}/frontend:latest
+                docker compose up -d --remove-orphans
+                sleep 20
+                docker compose ps
+              else
+                echo 'No previous images found for rollback'
+              fi
+            "
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+
+  # ==========================================
+  # Notify
+  # ==========================================
+  notify:
+    name: Notify Deployment Result
+    runs-on: ubuntu-latest
+    needs: [deploy, rollback]
+    if: always()
+    steps:
+      - name: Send deployment notification
+        run: |
+          STATUS="${{ needs.deploy.result }}"
+          if [ "$STATUS" = "success" ]; then
+            MESSAGE="✅ Deployment successful! Application deployed to production."
+          elif [ "$STATUS" = "failure" ]; then
+            if [ "${{ needs.rollback.result }}" = "success" ]; then
+              MESSAGE="⚠️ Deployment failed but rollback succeeded."
+            else
+              MESSAGE="❌ Deployment failed and rollback failed! Manual intervention required."
+            fi
+          else
+            MESSAGE="⚠️ Deployment skipped or cancelled."
+          fi
+          
+          echo "$MESSAGE"
+          
+          # Example: Send to webhook (uncomment and configure)
+          # curl -X POST -H 'Content-type: application/json' \
+          #   --data "{\"text\":\"$MESSAGE\"}" \
+          #   ${{ secrets.WEBHOOK_URL }}

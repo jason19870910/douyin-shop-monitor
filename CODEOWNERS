@@ -1,0 +1,46 @@
+# CODEOWNERS
+# These owners will be automatically requested for review when someone opens a PR.
+
+# Global owners (all files)
+* @maintainer-team
+
+# Backend
+/src/backend/ @backend-team
+/src/backend/app.py @backend-lead
+/src/backend/config/ @backend-lead
+/src/backend/blueprints/ @backend-team
+/src/backend/services/ @backend-team
+/src/backend/models/ @backend-team
+/src/backend/tests/ @backend-team @qa-team
+
+# Frontend
+/src/frontend/ @frontend-team
+/src/frontend/src/ @frontend-team
+/src/frontend/src/components/ @frontend-team
+/src/frontend/src/pages/ @frontend-team
+/src/frontend/src/api/ @frontend-team @backend-team
+
+# Infrastructure
+/.github/workflows/ @devops-team
+/docker-compose.yml @devops-team
+/nginx/ @devops-team
+/opt/douyin-platform/ @devops-team
+
+# Documentation
+/docs/ @docs-team
+/README.md @docs-team
+
+# Security sensitive
+**/secrets/ @security-team
+**/.env* @security-team
+**/*.key @security-team
+**/*.pem @security-team
+
+# Database migrations
+/src/backend/migrations/ @backend-lead @dba-team
+
+# Configuration
+/pyproject.toml @backend-lead
+/requirements*.txt @backend-team
+/src/frontend/package.json @frontend-lead
+/src/frontend/package-lock.json @frontend-lead

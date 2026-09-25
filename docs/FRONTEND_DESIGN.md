@@ -11,39 +11,43 @@
 - **构建工具**：Vite 5.x
 - **TypeScript**：严格模式
 
-## 主题系统 (Dark Theme)
+## 主题系统 (Light Theme)
 
 ### 设计原则
-- **统一色调**：采用左侧栏深色主题 (`#001529`)，全站统一深色背景
-- **设计令牌**：所有颜色、间距、圆角、阴影、字体通过 CSS Variables 定义，集中维护
-- **语义化命名**：颜色变量按用途分类（Primary/Success/Warning/Error/Neutral/Status/Sider）
+- **统一浅色主题**：全站采用浅色背景，侧边栏 Menu theme="light"，variables.css 与 tokens.ts 统一维护
+- **设计令牌**：所有颜色、间距、圆角、阴影、字体通过 CSS Variables 定义，集中维护在 `src/theme/variables.css` 与 `src/theme/tokens.ts`
+- **语义化命名**：颜色变量按用途分类（Primary/Success/Warning/Error/Neutral/Status）
 
 ### 核心色板
 ```css
-/* Primary Blue - 统一主色调 */
---color-primary-500: #1890ff;
---color-primary-600: #096dd9;
+/* Primary - 统一主色调 */
+--color-primary-500: #66A3FF;
+--color-primary-600: #4A8CFF;
 
-/* Dark Theme Background */
---color-bg-primary: #001529;      /* 页面主背景，与侧边栏一致 */
---color-bg-secondary: #001d3a;    /* 卡片、容器背景 */
---color-bg-tertiary: #002751;     /* 表头、悬浮层背景 */
+/* Light Theme Background */
+--color-bg-page: #FFFFFF;
+--color-bg-card: #FAFAFA;
+--bg-primary: #FFFFFF;
+--bg-secondary: #F5F5F5;
 
-/* Dark Theme Text */
---color-text-primary: #ffffff;
---color-text-secondary: rgba(255, 255, 255, 0.65);
---color-text-tertiary: rgba(255, 255, 255, 0.45);
+/* Light Theme Text */
+--color-text-primary: #18181B;
+--color-text-secondary: #52525B;
+--color-text-tertiary: #71717A;
+--color-text-inverted: #FFFFFF;
 
-/* Dark Theme Borders */
---color-border-light: rgba(255, 255, 255, 0.06);
---color-border-default: rgba(255, 255, 255, 0.1);
+/* Borders */
+--color-border-light: #E4E4E7;
+--color-border-default: #D4D4D8;
 
-/* Status Colors - Dark Theme Adapted */
---color-status-published: #95de64;
---color-status-draft: #69b1ff;
---color-status-pending: #ffd666;
---color-status-rejected: #ff7875;
+/* Status Colors */
+--color-status-published: #22C55E;
+--color-status-draft: #66A3FF;
+--color-status-pending: #F59E0B;
+--color-status-rejected: #EF4444;
 ```
+
+2026-09-21 更新：方案 2 统一浅色主题，Menu theme="dark" 改为 "light"，选中态文字色改为 `var(--color-text-inverted)` 提升对比，`chartWrapper` min-height 改为 auto 消除空白，移除侧边栏“色彩规范”菜单。
 
 ### 组件样式覆盖策略
 在 `src/index.css` 中全量覆盖 Ant Design 组件默认样式：
@@ -62,6 +66,8 @@
 | **douyin** (抖音管理) | `/douyin/*`, `/auth` | 🏠 首页、📺 视频管理、👤 创作者中心、🔐 授权管理 |
 | **dian** (抖店管理) | `/dian/*` | 🏠 首页、📦 商品管理、📊 数据中心、⚠️ 合规管理、🎬 视频编辑、🖼️ 图片编辑、🔑 账号管理 |
 | **alerts** (告警设置) | `/alerts/*` | 🏠 首页、🎵 抖音告警设置、🏪 抖店告警设置 |
+
+> 2026-09-21 更新：已从所有分组 `SIDEBAR_MENUS` 中移除“色彩规范”菜单项，侧边栏不再展示该卡片。
 
 ### 路由映射表
 

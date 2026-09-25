@@ -46,3 +46,25 @@ compliance_meta.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Windows system files (critical!)
+C:
+$RECYCLE.BIN
+$WinREAgent
+$Windows.~WS
+$WINDOWS.~BT
+desktop.ini
+ehthumbs.db
+Boot/
+Bootmgr
+Bootnxt
+pagefile.sys
+hiberfil.sys
+swapfile.sys
+AX NF ZZ
+AndrowsData
+Autodesk
+BluestacksCN
+6096779bb084295792
+AMTAG.BIN
+071BC6DC2DC9

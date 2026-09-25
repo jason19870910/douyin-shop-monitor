@@ -1,0 +1,10 @@
+{
+  "default": true,
+  "MD003": { "style": "atx" },
+  "MD004": { "style": "dash" },
+  "MD013": false,
+  "MD025": { "front_matter_title": "" },
+  "MD033": { "allowed_elements": ["br", "hr", "img", "input", "label"] },
+  "no-hard-tabs": false,
+  "whitespace": false
+}

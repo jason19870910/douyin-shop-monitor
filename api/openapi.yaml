@@ -1,0 +1,1402 @@
+openapi: 3.0.3
+info:
+  title: Douyin Monitor Platform API
+  version: 1.0.0
+  description: |
+    抖音电商数据监控平台统一 API 规范
+    
+    ## 架构层级
+    - **前端内部 API** (`/api/v1/*`) - 前端直接调用，需 `Authorization: Bearer <authToken>`
+    - **后端代理转发 API** - 内部路径 → 外部目标的映射，后端自动注入 Cookie/签名
+    - **外部原始 API** - 抖音/抖店开放平台完整参数规范
+    
+    ## 认证方式
+    | 接口层级 | 认证方式 |
+    |----------|----------|
+    | 前端内部 API | `Authorization: Bearer <authToken>` (OAuth 后写入 localStorage) |
+    | 后端代理转发 | 后端自动注入 Cookie + 动态签名 |
+    | 外部原始 API | Cookie + `__token` + `msToken` + `a_bogus` + `verifyFp` + `fp` |
+    
+    ## 响应格式
+    统一使用 `{ success: boolean, data: T, message?: string, error?: string, code?: number }`
+  contact:
+    name: Douyin Monitor Team
+  license:
+    name: Proprietary
+servers:
+  - url: https://wlkj-tech.cn/api/v1
+    description: 生产环境
+  - url: http://localhost:5000/api/v1
+    description: 本地开发环境
+security:
+  - BearerAuth: []
+tags:
+  - name: dashboard
+    description: 仪表盘聚合统计
+  - name: products
+    description: 商品管理
+  - name: orders
+    description: 订单管理
+  - name: creators
+    description: 创作者管理
+  - name: auth
+    description: 授权管理
+  - name: alerts
+    description: 告警配置
+  - name: sync
+    description: 数据同步
+  - name: health
+    description: 健康检查
+  - name: videos
+    description: 视频管理
+  - name: accounts
+    description: 账号管理
+  - name: compliance
+    description: 合规管理
+  - name: media
+    description: 媒体编辑
+  - name: proxy
+    description: 后端代理转发外部 API
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: OAuth 2.0 Bearer Token (authToken 存储在 localStorage)
+  schemas:
+    # 通用响应结构
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+        message:
+          type: string
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        error:
+          type: string
+        code:
+          type: integer
+    PaginatedResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: array
+          items:
+            type: object
+        total:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+        data_source:
+          type: string
+          enum: [real, mock, empty]
+    # 仪表盘
+    DashboardStats:
+      type: object
+      properties:
+        products:
+          type: object
+          properties:
+            total:
+              type: integer
+            on_sale:
+              type: integer
+            total_sales_today:
+              type: integer
+            total_sales_yesterday:
+              type: integer
+            avg_conversion_rate:
+              type: number
+            avg_conversion_rate_yesterday:
+              type: number
+        orders:
+          type: object
+          properties:
+            total:
+              type: integer
+            total_amount:
+              type: number
+        creators:
+          type: object
+          properties:
+            total:
+              type: integer
+            total_followers:
+              type: integer
+        videos:
+          type: object
+          properties:
+            total:
+              type: integer
+            total_views:
+              type: integer
+        sales_trend:
+          type: string
+          enum: [up, down, flat]
+        top_products:
+          type: array
+          items:
+            type: object
+            properties:
+              product_id:
+                type: string
+              product_name:
+                type: string
+              sales_today:
+                type: integer
+    DashboardStatsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/DashboardStats'
+    # 商品
+    Product:
+      type: object
+      properties:
+        product_id:
+          type: string
+        product_name:
+          type: string
+        status:
+          type: string
+        sales_today:
+          type: integer
+        sales_yesterday:
+          type: integer
+        conversion_rate_today:
+          type: number
+        conversion_rate_yesterday:
+          type: number
+    ProductListResponse:
+      allOf:
+        - $ref: '#/components/schemas/PaginatedResponse'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/Product'
+    ProductStats:
+      type: object
+      properties:
+        total_products:
+          type: integer
+        sales_today:
+          type: integer
+        sales_yesterday:
+          type: integer
+        inventory_total:
+          type: integer
+        conversion_rate:
+          type: number
+    ProductStatsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/ProductStats'
+    # 订单
+    Order:
+      type: object
+      properties:
+        order_id:
+          type: string
+        create_time:
+          type: string
+          format: date-time
+        status:
+          type: string
+        amount:
+          type: number
+        buyer:
+          type: object
+          properties:
+            uid:
+              type: string
+            nickname:
+              type: string
+    OrderListResponse:
+      allOf:
+        - $ref: '#/components/schemas/PaginatedResponse'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/Order'
+    OrderStats:
+      type: object
+      properties:
+        total:
+          type: integer
+        tabs:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              order_count:
+                type: integer
+              amount:
+                type: number
+    OrderStatsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/OrderStats'
+    # 创作者
+    Creator:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        follower_count:
+          type: integer
+        avatar:
+          type: string
+    CreatorListResponse:
+      allOf:
+        - $ref: '#/components/schemas/PaginatedResponse'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/Creator'
+    CreatorWorks:
+      type: object
+      properties:
+        works:
+          type: array
+          items:
+            type: object
+        total:
+          type: integer
+    # 认证
+    QRCodeResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                qr_code_url:
+                  type: string
+                ticket:
+                  type: string
+    AuthStatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                authorized:
+                  type: boolean
+                user_info:
+                  type: object
+    # 告警
+    AlertConfig:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        threshold:
+          type: number
+        channels:
+          type: array
+          items:
+            type: string
+    AlertConfigResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AlertConfig'
+    AlertHistoryResponse:
+      allOf:
+        - $ref: '#/components/schemas/PaginatedResponse'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                type: object
+    # 同步
+    SyncResult:
+      type: object
+      properties:
+        products:
+          type: object
+          properties:
+            count:
+              type: integer
+            status:
+              type: string
+        orders:
+          type: object
+          properties:
+            count:
+              type: integer
+            status:
+              type: string
+        creators:
+          type: object
+          properties:
+            count:
+              type: integer
+            status:
+              type: string
+        creator_works:
+          type: object
+          properties:
+            count:
+              type: integer
+            status:
+              type: string
+        compliance:
+          type: object
+          properties:
+            status:
+              type: string
+            message:
+              type: string
+        alerts:
+          type: object
+          properties:
+            alerts_triggered:
+              type: integer
+            status:
+              type: string
+        data_source:
+          type: string
+          enum: [real, mock, empty]
+    SyncResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/SyncResult'
+    SyncHistoryItem:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        duration_ms:
+          type: integer
+        status:
+          type: string
+          enum: [success, failed]
+        trigger:
+          type: string
+          enum: [scheduled, manual]
+        details:
+          type: object
+        error:
+          type: string
+    SyncHistoryResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/SyncHistoryItem'
+    # 健康检查
+    HealthResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [healthy, degraded, unhealthy]
+                timestamp:
+                  type: string
+                  format: date-time
+                last_update:
+                  type: string
+                  format: date-time
+    # 代理转发参数
+    ProxyProductsExternalParams:
+      type: object
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          default: 1
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+        keyword:
+          type: string
+        appid:
+          type: integer
+        __token:
+          type: string
+        _bid:
+          type: string
+        aid:
+          type: integer
+        _lid:
+          type: integer
+        msToken:
+          type: string
+        a_bogus:
+          type: string
+        verifyFp:
+          type: string
+        fp:
+          type: string
+    ProxyOrdersStatsParams:
+      type: object
+      properties:
+        tabcnt_version:
+          type: string
+        tab:
+          type: string
+        appid:
+          type: integer
+        __token:
+          type: string
+        _bid:
+          type: string
+        aid:
+          type: integer
+        _lid:
+          type: integer
+        msToken:
+          type: string
+        verifyFp:
+          type: string
+        fp:
+          type: string
+        a_bogus:
+          type: string
+    ProxyCreatorWorksParams:
+      type: object
+      properties:
+        status:
+          type: string
+          default: "0"
+        count:
+          type: integer
+          default: 12
+        max_cursor:
+          type: integer
+          default: 0
+        scene:
+          type: string
+          default: "star_atlas"
+        device_platform:
+          type: string
+          default: "android"
+        aid:
+          type: integer
+          default: 1128
+    # Mock 状态
+    MockStatus:
+      type: object
+      properties:
+        products:
+          type: string
+          enum: [real, mock, empty]
+        orders:
+          type: string
+          enum: [real, mock, empty]
+        creators:
+          type: string
+          enum: [real, mock, empty]
+        videos:
+          type: string
+          enum: [real, mock, empty]
+        creator_works:
+          type: string
+          enum: [real, mock, empty]
+        debug_mode:
+          type: boolean
+    MockStatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/MockStatus'
+paths:
+  /dashboard/stats:
+    get:
+      tags: [dashboard]
+      summary: 获取仪表盘聚合统计
+      description: 返回销量/收入/订单/转化率趋势 + TOP商品
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [7d, 30d, 90d]
+            default: 7d
+          description: 时间范围
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardStatsResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /products:
+    get:
+      tags: [products]
+      summary: 获取商品分页列表 (内部缓存)
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: keyword
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductListResponse'
+        '401':
+          description: 未授权
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /products/{id}:
+    get:
+      tags: [products]
+      summary: 获取单个商品详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Product'
+        '404':
+          description: 商品不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /products/stats:
+    get:
+      tags: [products, proxy]
+      summary: 获取商品统计 (代理转发至抖店)
+      description: 后端自动注入 Cookie 和签名参数，透传至 fxg.jinritemai.com/product/tproduct/aggsProductCount
+      parameters:
+        - name: tab
+          in: query
+          schema:
+            type: string
+        - name: appid
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductStatsResponse'
+        '401':
+          description: 未授权
+        '403':
+          description: 签名错误
+        '500':
+          description: 服务器错误
+  /products/external:
+    get:
+      tags: [products, proxy]
+      summary: 获取外部商品列表透传 (代理转发至抖店)
+      description: 完整透传参数至 fxg.jinritemai.com/product/tproduct/list，后端自动生成签名
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: keyword
+          in: query
+          schema:
+            type: string
+        - name: appid
+          in: query
+          schema:
+            type: integer
+        - name: __token
+          in: query
+          schema:
+            type: string
+        - name: _bid
+          in: query
+          schema:
+            type: string
+        - name: aid
+          in: query
+          schema:
+            type: integer
+        - name: _lid
+          in: query
+          schema:
+            type: integer
+        - name: msToken
+          in: query
+          schema:
+            type: string
+        - name: a_bogus
+          in: query
+          schema:
+            type: string
+        - name: verifyFp
+          in: query
+          schema:
+            type: string
+        - name: fp
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功 (透传外部响应)
+          content:
+            application/json:
+              schema:
+                type: object
+        '403':
+          description: 签名错误
+  /orders:
+    get:
+      tags: [orders]
+      summary: 获取订单分页列表 (内部缓存)
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: start_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: end_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [completed, pending, cancelled, refunded]
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderListResponse'
+        '401':
+          description: 未授权
+  /orders/stats:
+    get:
+      tags: [orders, proxy]
+      summary: 获取订单统计 (代理转发至抖店)
+      description: 透传至 fxg.jinritemai.com/api/order/tabcnt
+      parameters:
+        - name: tabcnt_version
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: tab
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: appid
+          in: query
+          schema:
+            type: integer
+        - name: __token
+          in: query
+          schema:
+            type: string
+        - name: _bid
+          in: query
+          schema:
+            type: string
+        - name: aid
+          in: query
+          schema:
+            type: integer
+        - name: _lid
+          in: query
+          schema:
+            type: integer
+        - name: msToken
+          in: query
+          schema:
+            type: string
+        - name: verifyFp
+          in: query
+          schema:
+            type: string
+        - name: fp
+          in: query
+          schema:
+            type: string
+        - name: a_bogus
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderStatsResponse'
+        '403':
+          description: 签名错误
+  /creators:
+    get:
+      tags: [creators]
+      summary: 获取创作者列表 (内部缓存)
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatorListResponse'
+        '401':
+          description: 未授权
+  /creators/{id}:
+    get:
+      tags: [creators]
+      summary: 获取创作者详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Creator'
+        '404':
+          description: 创作者不存在
+  /creators/works:
+    get:
+      tags: [creators]
+      summary: 获取创作者作品列表 (内部缓存)
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CreatorWorks'
+        '401':
+          description: 未授权
+  /creators/works/external:
+    get:
+      tags: [creators, proxy]
+      summary: 获取外部创作者作品列表透传 (代理转发至创作者中心)
+      description: 透传至 creator.douyin.com/janus/douyin/creator/pc/work_list
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            default: "0"
+        - name: count
+          in: query
+          schema:
+            type: integer
+            default: 12
+        - name: max_cursor
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: scene
+          in: query
+          schema:
+            type: string
+            default: "star_atlas"
+        - name: device_platform
+          in: query
+          schema:
+            type: string
+            default: "android"
+        - name: aid
+          in: query
+          schema:
+            type: integer
+            default: 1128
+      responses:
+        '200':
+          description: 成功 (透传外部响应)
+          content:
+            application/json:
+              schema:
+                type: object
+        '403':
+          description: 签名错误
+  /auth/qr-code:
+    get:
+      tags: [auth]
+      summary: 获取 OAuth 二维码
+      description: 无需 authToken，建议使用 skipAuth: true
+      security: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QRCodeResponse'
+        '500':
+          description: 服务器错误
+  /auth/login:
+    get:
+      tags: [auth]
+      summary: 发起登录跳转
+      description: 无需 authToken，建议使用 skipAuth: true
+      security: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '500':
+          description: 服务器错误
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: 撤销授权
+      description: 无需 authToken，建议使用 skipAuth: true
+      security: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+  /auth/status:
+    get:
+      tags: [auth]
+      summary: 查询授权状态
+      description: 无需 authToken，建议使用 skipAuth: true
+      security: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthStatusResponse'
+        '500':
+          description: 服务器错误
+  /alerts/config:
+    get:
+      tags: [alerts]
+      summary: 获取全量告警配置
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertConfigResponse'
+        '401':
+          description: 未授权
+    post:
+      tags: [alerts]
+      summary: 更新告警配置
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertConfig'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: 未授权
+  /alerts/history:
+    get:
+      tags: [alerts]
+      summary: 获取告警历史分页
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: type
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertHistoryResponse'
+        '401':
+          description: 未授权
+    delete:
+      tags: [alerts]
+      summary: 清空告警历史
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+  /alerts/history/stats:
+    get:
+      tags: [alerts]
+      summary: 获取告警统计
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+  /sync:
+    post:
+      tags: [sync]
+      summary: 手动触发全量数据同步
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+      responses:
+        '200':
+          description: 同步完成
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncResponse'
+        '401':
+          description: 未授权
+        '500':
+          description: 同步失败
+  /sync/history:
+    get:
+      tags: [sync]
+      summary: 获取同步历史
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncHistoryResponse'
+        '401':
+          description: 未授权
+  /health:
+    get:
+      tags: [health]
+      summary: 服务健康检查
+      security: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /mock/status:
+    get:
+      tags: [dashboard]
+      summary: 获取 Mock 数据状态
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MockStatusResponse'
+  /creator/dashboard:
+    post:
+      tags: [proxy, creators]
+      summary: 获取创作者中心概览 (代理转发)
+      description: 透传至 creator.douyin.com/janus/douyin/creator/data/overview/dashboard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                recent_days:
+                  type: integer
+                  default: 7
+      responses:
+        '200':
+          description: 成功 (透传外部响应)
+          content:
+            application/json:
+              schema:
+                type: object
+        '403':
+          description: 签名错误
+  /shop/compass:
+    get:
+      tags: [proxy, alerts]
+      summary: 获取抖店罗盘数据 (代理转发)
+      description: 透传至抖店罗盘 API (URL 待补充)，后端自动注入 Cookie 和签名参数
+      parameters:
+        - name: shop_id
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: 店铺 ID
+        - name: date_range
+          in: query
+          schema:
+            type: string
+            enum: [last7, last30]
+            default: last7
+          description: 日期范围
+        - name: __token
+          in: query
+          schema:
+            type: string
+        - name: msToken
+          in: query
+          schema:
+            type: string
+        - name: a_bogus
+          in: query
+          schema:
+            type: string
+        - name: verifyFp
+          in: query
+          schema:
+            type: string
+        - name: fp
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功 (透传外部响应)
+          content:
+            application/json:
+              schema:
+                type: object
+        '403':
+          description: 签名错误
+  /videos:
+    get:
+      tags: [videos]
+      summary: 获取视频列表
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+  /accounts:
+    get:
+      tags: [accounts]
+      summary: 获取账号列表
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+  /compliance:
+    get:
+      tags: [compliance]
+      summary: 获取合规列表
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+  /compliance/stats:
+    get:
+      tags: [compliance]
+      summary: 获取合规统计
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+  /compliance/rules:
+    get:
+      tags: [compliance]
+      summary: 获取合规规则
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+    post:
+      tags: [compliance]
+      summary: 创建合规规则
+      responses:
+        '200':
+          description: 成功
+  /compliance/check:
+    post:
+      tags: [compliance]
+      summary: 触发合规检测
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+  /media/video-edit:
+    get:
+      tags: [media]
+      summary: 获取视频编辑列表
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+    post:
+      tags: [media]
+      summary: 创建视频编辑任务
+      responses:
+        '200':
+          description: 成功
+  /media/image-edit:
+    get:
+      tags: [media]
+      summary: 获取图片编辑列表
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+    post:
+      tags: [media]
+      summary: 创建图片编辑任务
+      responses:
+        '200':
+          description: 成功
+  /alerts/douyin/config:
+    get:
+      tags: [alerts]
+      summary: 获取抖音告警配置
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertConfigResponse'
+    post:
+      tags: [alerts]
+      summary: 更新抖音告警配置
+      responses:
+        '200':
+          description: 成功
+  /alerts/dian/config:
+    get:
+      tags: [alerts]
+      summary: 获取抖店告警配置
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertConfigResponse'
+    post:
+      tags: [alerts]
+      summary: 更新抖店告警配置
+      responses:
+        '200':
+          description: 成功
