@@ -235,4 +235,4 @@ sync_update.zip
 *.backup
 monitor_env_tmp
 lastfailed
-nodeids
+nodeids/src/frontend/build

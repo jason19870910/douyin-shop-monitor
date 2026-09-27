@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, Suspense, lazy } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { Layout as AntLayout, Menu, Button, Avatar, Dropdown, Space, Badge, message } from 'antd';
 import { Link, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -26,7 +26,8 @@ import { useApi } from '@/hooks/useApi';
 import { formatDateTime } from '@/utils/formatters';
 import styles from './Layout.module.css';
 
-// 椤甸潰缁勪欢 - DashboardPage 鍚屾瀵煎叆锛堟斁鍦ㄩ《閮ㄧ‘淇濊鎵撳寘锛?import HomePage from '../pages/Home';
+// 页面组件 - DashboardPage 懒加载导入（放在第一个，避免被打包进主包）
+import HomePage from '../pages/Home';
 import DashboardPage from '../pages/Dashboard';
 import ColorShowcasePage from '../pages/ColorShowcase';
 const VideosPage = lazy(() => import('../pages/Videos'));
@@ -91,7 +92,6 @@ function getSidebarType(pathname) {
 export const AppLayout = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [sidebarType, setSidebarType] = useState('home');
-  const [lastUpdate, setLastUpdate] = useState<string | null>(null);
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -108,11 +108,11 @@ export const AppLayout = () => {
 
   // Update lastUpdate from health data
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => {
-    if (healthData?.last_update) {
-      setLastUpdate(healthData.last_update);
-    }
-  }, [healthData]);
+  // useEffect(() => {
+  //   if (healthData?.last_update) {
+  //     setLastUpdate(healthData.last_update);
+  //   }
+  // }, [healthData]);
 
   const handleSync = async () => {
     setSyncLoading(true);
@@ -202,7 +202,7 @@ export const AppLayout = () => {
           <div className={styles.siderFooter}>
             <div className={styles.siderSyncArea}>
               <span className={styles.siderLastUpdate}>
-                同步数据 {lastUpdate ? formatDateTime(lastUpdate) : '暂无'}
+                同步数据 {healthData?.last_update ? formatDateTime(healthData.last_update) : '暂无'}
               </span>
               <Button
                 className={styles.siderSyncBtn}

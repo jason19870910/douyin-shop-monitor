@@ -123,7 +123,11 @@ DEFAULT_MEDIA = []
 
 
 def _read_secret(secret_name: str, env_var: str = None, default: str = '') -> str:
-    """Read secret from Docker secret file, then environment variable, then default."""
+    """Read secret from environment variable first, then Docker secret file, then default."""
+    if env_var:
+        env_val = os.getenv(env_var)
+        if env_val is not None and env_val != '':
+            return env_val
     secret_path = Path(f'/run/secrets/{secret_name}')
     if secret_path.exists():
         try:
@@ -249,52 +253,29 @@ def _fetch_products_from_api() -> List[Dict[str, Any]]:
     endpoint = f"{Config.FXG_BASE_URL}/product/tproduct/list"
     base_params = {
         'page': 0,
-        'pageSize': 20,
-        'draft_status': 0,
-        'comment_percent': '',
-        'group_id': '',
-        'sku_type': '',
-        'tab': 'onSale',
-        'business_type': 4,
-        'is_online': 1,
-        'not_for_sale_search_type': 1,
-        'from_mng': 1,
-        'check_status': 3,
-        'status': 0,
-        'supply_status': '',
-        'need_auto_rectify_info': 'true',
-        'need_pay_no_stock_skus': 'true',
-        'order_field': 'audit_time',
-        'sort': 'desc',
-        'appid': 1,
-        '_bid': 'ffa_goods',
-        'aid': Config.FXG_SHOP_ID,
-        '_lid': '829906029528',
+        'pageSize': 1,
     }
     
-    # Import sign_request from douyin_sign
-    from douyin_sign import sign_request
+    params = base_params
     
-    existing_tokens = {
-        '__token': _read_secret('token', '__TOKEN'),
-        'msToken': _read_secret('ms_token', 'MS_TOKEN'),
-        'verifyFp': _read_secret('verify_fp', 'verifyFp'),
-        'fp': _read_secret('fp', 'fp'),
+    cookie_str = os.getenv('FXG_COOKIES', '')
+    headers = {
+        'User-Agent': Config.USER_AGENT,
+        'Referer': 'https://fxg.jinritemai.com/product/tproduct/list',
+        'Cookie': cookie_str,
     }
     
-    sign_params = sign_request(endpoint, base_params, existing_tokens, Config.USER_AGENT)
-    params = {**base_params, **sign_params}
-    
-    headers = Config.COMMON_HEADERS.copy()
-    cookies = get_fxg_cookies()
-    
-    resp = requests.get(endpoint, params=params, headers=headers, cookies=cookies, timeout=30)
+    resp = requests.get(endpoint, params=params, headers=headers, timeout=30)
     resp.raise_for_status()
     result = resp.json()
     
     # 兼容外部 API 返回 list 或 dict
     try:
-        products = result.get('data', {}).get('products', [])
+        data_block = result.get('data')
+        if isinstance(data_block, list):
+            products = data_block
+        else:
+            products = (data_block or {}).get('products', [])
     except AttributeError:
         products = result if isinstance(result, list) else []
     
@@ -336,9 +317,6 @@ def _fetch_orders_from_api() -> List[Dict[str, Any]]:
     """Fetch orders from external FXG API."""
     logger.info("Fetching orders from external FXG API...")
     
-    # Import sign_request from douyin_sign
-    from douyin_sign import sign_request
-    
     endpoint = f'{Config.FXG_BASE_URL}/api/order/searchlist'
     base_params = {
         'page': 0,
@@ -348,20 +326,18 @@ def _fetch_orders_from_api() -> List[Dict[str, Any]]:
         'tab': 'all',
         'appid': 1,
         '_bid': 'ffa_order',
-        'aid': '4272',
-        '_lid': '843863276461',
+        'aid': Config.FXG_ORDER_AID,
+        '_lid': Config.FXG_ORDER_LID,
     }
-    existing_tokens = {
-        '__token': _read_secret('token', '__TOKEN'),
-        'msToken': _read_secret('ms_token', 'MS_TOKEN'),
-        'verifyFp': _read_secret('verify_fp', 'verifyFp'),
-        'fp': _read_secret('fp', 'fp'),
+    cookie_str = os.getenv('FXG_COOKIES', '')
+    headers = {
+        'User-Agent': Config.USER_AGENT,
+        'Referer': 'https://fxg.jinritemai.com/',
+        'Cookie': cookie_str,
     }
-    sign_params = sign_request(endpoint, base_params, existing_tokens, Config.USER_AGENT)
-    params = {**base_params, **sign_params}
-    cookies = get_fxg_cookies()
+    params = base_params
     
-    response = requests.get(endpoint, headers=Config.COMMON_HEADERS, params=params, cookies=cookies, timeout=30)
+    response = requests.get(endpoint, headers=headers, params=params, timeout=30)
     response.raise_for_status()
     result = response.json()
     
@@ -369,7 +345,13 @@ def _fetch_orders_from_api() -> List[Dict[str, Any]]:
     if isinstance(result, list):
         orders = result
     elif isinstance(result, dict):
-        orders = result.get('data', {}).get('orders', result.get('orders', []))
+        data_block = result.get('data')
+        if isinstance(data_block, list):
+            orders = data_block
+        elif isinstance(data_block, dict):
+            orders = data_block.get('orders', [])
+        else:
+            orders = result.get('orders', [])
     else:
         orders = []
     return orders
@@ -406,14 +388,47 @@ def _fetch_creators_from_api() -> List[Dict[str, Any]]:
     
     url = f'{Config.CREATOR_BASE_URL}/janus/douyin/creator/data/overview/dashboard'
     payload = {"recent_days": 7}
-    cookies = get_creator_cookies()
+    cookie_str = os.getenv('CREATOR_COOKIES', '')
+    headers = {
+        'User-Agent': Config.USER_AGENT,
+        'Referer': 'https://creator.douyin.com/',
+        'Cookie': cookie_str,
+    }
     
-    response = requests.post(url, headers=Config.COMMON_HEADERS, json=payload, cookies=cookies, timeout=30)
+    response = requests.post(url, headers=headers, json=payload, timeout=30)
     response.raise_for_status()
     result = response.json()
     
     creators = result.get('data', {}).get('creators', [])
     return creators
+
+
+@_http_retry(max_retries=3, base_delay=1.0, max_delay=10.0)
+def _fetch_creator_overview_from_api(recent_days: int = 7) -> Dict[str, Any]:
+    """Fetch creator overview from external Creator API."""
+    logger.info(f"Fetching creator overview from external Creator API (recent_days={recent_days})...")
+
+    url = f'{Config.CREATOR_BASE_URL}/janus/douyin/creator/data/overview/dashboard'
+    payload = {"recent_days": recent_days}
+    cookie_str = os.getenv('CREATOR_COOKIES', '')
+    headers = {
+        'User-Agent': Config.USER_AGENT,
+        'Referer': 'https://creator.douyin.com/',
+        'Cookie': cookie_str,
+    }
+
+    response = requests.post(url, headers=headers, json=payload, timeout=30)
+    response.raise_for_status()
+    result = response.json()
+
+    # 外部 API 返回格式：{ code: 0, data: { total_followers, total_videos, recent_view, recent_like } }
+    data = result.get('data', {})
+    return {
+        'total_followers': data.get('total_followers', 0),
+        'total_videos': data.get('total_videos', 0),
+        'recent_view': data.get('recent_view', 0),
+        'recent_like': data.get('recent_like', 0),
+    }
 
 
 def fetch_and_store_creators() -> Dict[str, Any]:
@@ -452,19 +467,23 @@ def _fetch_creator_works_from_api() -> List[Dict[str, Any]]:
         'max_cursor': '0',
         'scene': 'star_atlas',
         'device_platform': 'android',
-        'aid': '1128',
+        'aid': Config.CREATOR_WORK_AID,
     }
-    headers = Config.COMMON_HEADERS.copy()
-    headers.update({
+    cookie_str = os.getenv('CREATOR_COOKIES', '')
+    headers = {
+        'User-Agent': Config.USER_AGENT,
         'Referer': 'https://creator.douyin.com/creator-micro/content/manage',
-    })
-    cookies = get_creator_cookies()
+        'Cookie': cookie_str,
+    }
     
-    resp = requests.get(endpoint, params=params, headers=headers, cookies=cookies, timeout=30)
+    resp = requests.get(endpoint, params=params, headers=headers, timeout=30)
     resp.raise_for_status()
     result = resp.json()
     
-    works = result.get('data', {}).get('works', [])
+    # 兼容不同的返回结构：aweme_list / data / works
+    works = result.get('aweme_list') or result.get('items') or []
+    if isinstance(works, dict):
+        works = works.get('works', [])
     return works
 
 

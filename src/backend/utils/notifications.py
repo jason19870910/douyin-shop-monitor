@@ -70,14 +70,11 @@ def send_wechat_notification(alert: Dict[str, Any]) -> bool:
     }
     severity = severity_map.get(alert_type, 'info')
 
+    prefix = '<font color="warning">' if severity == "warning" else '<font color="info">'
     payload = {
         'msgtype': 'markdown',
         'markdown': {
-            'content': (
-                f'{"<font color="warning">" if severity == "warning" else "<font color="info">"}'
-                f'{text}'
-                f'</font>'
-            )
+            'content': f'{prefix}{text}</font>'
         }
     }
 

@@ -215,18 +215,31 @@ def check_auth():
     if request.path.startswith('/static/') or request.path == '/' or request.path.startswith('/favicon'):
         return
 
-    api_key = (Config.API_KEY or '').strip()
-    if not api_key:
-        return unauthorized_response('Server API key is not configured')
-
     if request.path.startswith('/api/v1/'):
         auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
-            return unauthorized_response('Missing or invalid Authorization header')
+        api_key_header = request.headers.get('X-API-Key', '')
 
-        token = auth_header[7:]
-        if token != api_key:
-            return unauthorized_response('Invalid API key')
+        from config import Config
+        api_key = (Config.API_KEY or '').strip()
+        if not api_key:
+            return unauthorized_response('Server API key is not configured')
+        print(f"[AUTH DEBUG] API_KEY from Config: {repr(api_key)}", flush=True)
+        print(f"[AUTH DEBUG] auth_header: {repr(auth_header)}", flush=True)
+        print(f"[AUTH DEBUG] X-API-Key: {repr(api_key_header)}", flush=True)
+        
+        # Verify Authorization: Bearer token
+        bearer_valid = auth_header.startswith('Bearer ') and auth_header[7:] == api_key
+
+        # Verify X-API-Key header
+        api_key_valid = api_key_header == api_key and api_key != ''
+
+        print(f"[AUTH DEBUG] bearer_valid: {bearer_valid}", flush=True)
+        print(f"[AUTH DEBUG] api_key_valid: {api_key_valid}", flush=True)
+        print(f"[AUTH DEBUG] result: {bearer_valid or api_key_valid}", flush=True)
+
+        # Accept if either validation passes (both headers should carry same key)
+        if not (bearer_valid or api_key_valid):
+            return unauthorized_response('Missing or invalid Authorization header or X-API-Key')
 
 
 app.register_blueprint(products_bp)

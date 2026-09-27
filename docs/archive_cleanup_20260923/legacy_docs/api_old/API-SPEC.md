@@ -139,7 +139,92 @@ print(call(url, params, cookies))
 
 ---
 
-## 10. 版本变更记录
+## 10. 外部接口响应示例
+
+### 10.1 商品聚合统计 `/product/tproduct/aggsProductCount`
+**请求示例**
+```
+GET https://fxg.jinritemai.com/product/tproduct/aggsProductCount?tab=onSale&appid=1&_bid=ffa_goods&_lid=638198341795&__token=...&msToken=...&a_bogus=...&verifyFp=...&fp=...
+```
+**响应示例**
+```json
+{
+  "errno": 0,
+  "st": 0,
+  "msg": "",
+  "code": 0,
+  "data": {
+    "audit": 0,
+    "draft": 0,
+    "forbidden": 0,
+    "onsale": 9,
+    "sell_out_new": 0,
+    "unpass": 0,
+    "unpass_new": 0
+  },
+  "page": 0,
+  "total": 0,
+  "size": 0
+}
+```
+
+### 10.2 创作者概览 `/janus/douyin/creator/data/overview/dashboard`
+**请求示例**
+```bash
+curl -X POST https://creator.douyin.com/janus/douyin/creator/data/overview/dashboard \
+  -H "Content-Type: application/json" \
+  -H "Referer: https://creator.douyin.com/creator-micro/data-center/operation" \
+  -b "sessionid=...; sid_tt=...; uid_tt=..." \
+  -d '{"recent_days":7}'
+```
+**响应示例**
+```json
+{
+  "status_code": 0,
+  "data": {
+    "play_sum": 123456,
+    "like_sum": 7890,
+    "comment_sum": 123,
+    "share_sum": 456,
+    "follower_change": 100
+  }
+}
+```
+
+### 10.3 创作者作品列表 `/janus/douyin/creator/pc/work_list`
+**请求示例**
+```
+GET https://creator.douyin.com/janus/douyin/creator/pc/work_list?status=0&count=12&max_cursor=0&scene=star_atlas&device_platform=android&aid=1128
+```
+**响应示例**
+```json
+{
+  "status_code": 0,
+  "data": {
+    "works": [
+      {
+        "work_id": "123456",
+        "title": "作品标题",
+        "cover_url": "https://...",
+        "play_count": 1000
+      }
+    ],
+    "max_cursor": "0"
+  }
+}
+```
+
+### 10.4 订单列表 `/api/order/searchlist`
+**响应示例（风控）**
+```json
+{
+  "code": "10001010A",
+  "msg": "当前环境存在风险，请稍后重试"
+}
+```
+
+## 11. 版本变更记录
 | 版本 | 日期 | 变更 |
 |------|------|------|
 | 1.0.0 | 2026-08-12 | 初始版本：整理 6 外部 API 与 4 内部转发接口 |
+| 1.1.0 | 2026-09-22 | 增加商品聚合统计、创作者作品列表响应示例，更新签名机制为 Docker Secrets 热更新，订单接口标注风控状态 |

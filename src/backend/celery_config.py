@@ -3,7 +3,7 @@ from celery import Celery
 from celery.schedules import crontab
 
 # Celery configuration
-celery_app = Celery('douyin_monitor')
+celery_app = Celery('douyin_monitor', include=['tasks'])
 
 celery_app.conf.update(
     broker_url=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'),
@@ -26,6 +26,10 @@ celery_app.conf.update(
             'task': 'tasks.fetch_creators_task',
             'schedule': 3600.0,  # 1 hour
         },
+        'fetch-creator-works-every-hour': {
+            'task': 'tasks.fetch_creator_works_task',
+            'schedule': 3600.0,  # 1 hour
+        },
         'check-alerts-every-5-minutes': {
             'task': 'tasks.check_alerts_task',
             'schedule': 300.0,  # 5 minutes
@@ -33,6 +37,10 @@ celery_app.conf.update(
         'refresh-oauth-token-every-30-minutes': {
             'task': 'tasks.refresh_oauth_token_task',
             'schedule': 1800.0,  # 30 minutes
+        },
+        'scheduled-job-every-hour': {
+            'task': 'tasks.scheduled_job_task',
+            'schedule': 3600.0,  # 1 hour
         },
     },
 )

@@ -2,7 +2,7 @@
 from flask import Blueprint, request, current_app, make_response
 from services.fetcher import cache, CACHE_KEYS, get_config, set_config, DEFAULT_AUTH_CONFIG
 from datetime import datetime, timedelta
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote_plus
 import base64
 import requests
 import logging
@@ -75,16 +75,15 @@ def _build_oauth_url(auth_config: dict) -> tuple[str, str]:
     
     Returns tuple of (oauth_url, state_token)
     """
-    base_url = "https://open.douyin.com/platform/oauth/connect"
+    base_url = "https://open.douyin.com/platform/oauth/connect/"
     
     client_key = auth_config.get('douyin_app_id', '')
     redirect_uri = auth_config.get('redirect_uri')
     if not client_key or not redirect_uri:
         raise ValueError("Missing douyin_app_id or redirect_uri in auth config")
     
-    # Encode redirect_uri - only encode special chars like '#', keep ':' and '/' as-is
-    # Per Douyin docs: only encode when '#' etc. present; ':' and '/' are valid URL chars
-    encoded_redirect = quote(redirect_uri, safe='/:')
+    # Encode redirect_uri because it may contain "/", "?" or other reserved chars
+    encoded_redirect = quote_plus(redirect_uri)
     
     # Scope - read from environment variable DOUYIN_SCOPE
     # Falls back to hardcoded scope with valid Douyin OAuth scopes

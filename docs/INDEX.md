@@ -13,12 +13,13 @@
 ## 🚀 部署与运维
 | 文档 | 说明 |
 |------|------|
-| [3_deployment/DEPLOY_GUIDE.md](./3_deployment/DEPLOY_GUIDE.md) | 生产环境部署指南：服务器信息、Docker Compose 编排、部署脚本、目录映射、Secrets 配置、故障排查、环境变量、自动化部署 |
+| [RUNBOOK.md](./RUNBOOK.md) | 生产环境运维手册：部署流程、故障排查、备份恢复、Secrets 配置 |
+| [NGINX_WLJKDOC.md](./NGINX_WLJKDOC.md) | Nginx 配置说明与反向代理文档 |
 
 ## 🛡️ 安全与合规
 | 文档 | 说明 |
 |------|------|
-| [7_reference/SECURITY.md](./7_reference/SECURITY.md) | 安全策略与漏洞上报流程（基于 Microsoft 安全模板，需根据项目实际情况完善） |
+| [SECURITY_HARDENING.md](./SECURITY_HARDENING.md) | 安全加固指南与合规检查清单 |
 
 ## 🛠️ 开发与贡献
 | 文档 | 说明 |

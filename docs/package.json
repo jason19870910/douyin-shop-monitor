@@ -1,25 +1,35 @@
 {
-  "name": "docs-site",
+  "name": "douyin-monitor-docs",
   "version": "1.0.0",
-  "description": "Static documentation generator using marked",
+  "description": "抖音电商数据监控平台 - 项目文档中心",
   "type": "module",
-  "main": "convert.js",
   "scripts": {
-    "build": "node convert.js",
-    "serve": "node serve.js",
-    "lint": "markdownlint \"**/*.md\"",
-    "test": "jest",
-    "ci": "npm run lint && npm test && npm run build"
+    "docs:dev": "vitepress dev .",
+    "docs:build": "vitepress build .",
+    "docs:preview": "vitepress preview .",
+    "validate:frontmatter": "python3 scripts/validate_frontmatter.py",
+    "generate:index": "python3 scripts/generate_index.py",
+    "check:links": "python3 scripts/check_links.py",
+    "lint": "markdownlint-cli2 \"**/*.md\" --config .markdownlint.json",
+    "spellcheck": "cspell \"**/*.md\" --config cspell.json"
   },
-  "keywords": ["documentation", "markdown", "generator"],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "marked": "^12.0.0"
-  },
+  "keywords": [
+    "documentation",
+    "vitepress",
+    "douyin",
+    "monitor",
+    "project-docs"
+  ],
+  "author": "抖音电商数据监控平台项目组",
+  "license": "MIT",
   "devDependencies": {
-    "jest": "^29.7.0",
-    "markdownlint-cli": "^0.40.0",
-    "serve": "^14.2.0"
+    "vitepress": "^1.0.0",
+    "vue": "^3.4.0",
+    "markdownlint-cli2": "^0.12.0",
+    "cspell": "^8.0.0",
+    "mermaid": "^10.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

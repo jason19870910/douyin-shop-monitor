@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     # =========================================================================
     FXG_SHOP_ID: int = Field(default=4272, description='抖店 Shop ID')
     FXG_LOG_ID: str = Field(default='104476165896', description='抖店 Log ID')
+    FXG_PRODUCT_LID: str = Field(default='829906029528', description='抖店商品列表 _lid')
+    FXG_ORDER_LID: str = Field(default='646601599070', description='抖店订单列表 _lid')
+    FXG_ORDER_AID: int = Field(default=4272, description='抖店订单列表 aid')
+    CREATOR_WORK_AID: int = Field(default=1128, description='创作者作品列表 aid')
     
     # =========================================================================
     # Celery / Redis 配置
