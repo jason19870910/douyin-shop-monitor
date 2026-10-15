@@ -51,6 +51,7 @@ from blueprints import (
     dashboard_bp,
     sync_bp,
     frontend_bp,
+    system_bp,
 )
 from utils.responses import unauthorized_response
 from middleware.health import health
@@ -270,6 +271,7 @@ app.register_blueprint(alerts_bp)
 app.register_blueprint(dashboard_bp)
 app.register_blueprint(sync_bp)
 app.register_blueprint(frontend_bp)
+app.register_blueprint(system_bp)
 
 @app.route('/api/v1/health', methods=['GET'])
 def health_check():

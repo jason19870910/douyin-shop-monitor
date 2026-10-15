@@ -11,6 +11,7 @@ from blueprints.alerts import alerts_bp
 from blueprints.dashboard import dashboard_bp
 from blueprints.frontend import frontend_bp
 from blueprints.sync import sync_bp
+from blueprints.system import system_bp
 
 __all__ = [
     'products_bp',
@@ -25,4 +26,5 @@ __all__ = [
     'dashboard_bp',
     'frontend_bp',
     'sync_bp',
+    'system_bp',
 ]

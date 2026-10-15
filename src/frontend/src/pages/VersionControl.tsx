@@ -42,9 +42,55 @@ const VersionControl = () => {
   const { data: deployStatus, isLoading: loadingDeploy } = useApi(() => versionApi.getStatus() as Promise<DeploymentStatus | undefined>, ['status']);
   const { data: envConfig, isLoading: loadingEnv } = useApi(() => versionApi.getEnv() as Promise<EnvConfig | undefined>, ['env']);
 
+  // 判断版本来源
+  const getVersionSource = (version: string): { label: string; color: 'success' | 'warning' | 'default' } => {
+    if (!version || version === 'dev' || version === 'unknown') {
+      return { label: '开发版', color: 'default' };
+    }
+    if (version.startsWith('v') && /^v\d+\.\d+\.\d+/.test(version)) {
+      return { label: 'Release 版本', color: 'success' };
+    }
+    if (version.includes('-') || /^[a-f0-9]{7,}$/.test(version)) {
+      return { label: 'Commit 版本', color: 'warning' };
+    }
+    return { label: '未知', color: 'default' };
+  };
+
+  // 格式化版本显示：语义化版本优先，commit 作为次要
+  const formatVersionDisplay = (version: string, commit: string) => {
+    const source = getVersionSource(version);
+    if (source.label === 'Release 版本') {
+      return (
+        <>
+          <span style={{ fontWeight: 600 }}>{version}</span>
+          <Tag color={source.color} style={{ marginLeft: 8, fontSize: 11 }}>{source.label}</Tag>
+          <div style={{ marginTop: 4, fontSize: 12, color: 'var(--color-text-secondary)', fontFamily: 'monospace' }}>
+            {commit.substring(0, 12)}
+          </div>
+        </>
+      );
+    }
+    if (source.label === 'Commit 版本') {
+      return (
+        <>
+          <span style={{ fontFamily: 'monospace', fontWeight: 500 }}>{version}</span>
+          <Tag color={source.color} style={{ marginLeft: 8, fontSize: 11 }}>{source.label}</Tag>
+        </>
+      );
+    }
+    return (
+      <>
+        <span>{version}</span>
+        <Tag color={source.color} style={{ marginLeft: 8, fontSize: 11 }}>{source.label}</Tag>
+      </>
+    );
+  };
+
   const renderVersionInfo = () => {
     if (loadingVersion) return <Spin size="large" style={{ display: 'block', margin: '24px auto' }} />;
     if (!versionInfo) return <Empty description="获取版本信息失败" style={{ padding: 24 }} />;
+
+    const versionSource = getVersionSource(versionInfo.version);
 
     return (
       <Card>
@@ -52,7 +98,7 @@ const VersionControl = () => {
           <Col xs={24} md={12}>
             <Statistic
               title="版本号"
-              value={versionInfo.version}
+              value={formatVersionDisplay(versionInfo.version, versionInfo.commit)}
               prefix={<Tag color="info">VERSION</Tag>}
               valueStyle={{ fontSize: 20, fontWeight: 600 }}
             />
@@ -82,11 +128,14 @@ const VersionControl = () => {
         </Row>
         <Divider style={{ margin: '16px 0' }} />
         <Descriptions layout="vertical" size="middle">
+          <Descriptions.Item label="版本来源">
+            <Tag color={versionSource.color}>{versionSource.label}</Tag>
+          </Descriptions.Item>
           <Descriptions.Item label="API Key 状态">
             {versionInfo.apiKeyInlined ? (
               <Badge color="success" text="已内联到前端构建" />
             ) : (
-              <Badge color="error" text="运行时从后端获取" />
+              <Badge color="warning" text="运行时从后端获取" />
             )}
           </Descriptions.Item>
           <Descriptions.Item label="完整 Commit">{versionInfo.commit}</Descriptions.Item>
@@ -158,10 +207,28 @@ const VersionControl = () => {
     if (loadingEnv) return <Spin size="large" style={{ display: 'block', margin: '24px auto' }} />;
     if (!envConfig) return <Empty description="获取环境配置失败" style={{ padding: 24 }} />;
 
+    const isProduction = versionInfo?.environment === 'production';
+    
     const envItems = [
-      { key: 'VITE_API_KEY', label: 'VITE_API_KEY', value: envConfig.VITE_API_KEY || '未设置', sensitive: true },
-      { key: 'VITE_DEV_MODE', label: 'VITE_DEV_MODE', value: String(envConfig.VITE_DEV_MODE || 'false'), sensitive: false },
-      { key: 'VITE_ENABLE_MOCK_FALLBACK', label: 'VITE_ENABLE_MOCK_FALLBACK', value: String(envConfig.VITE_ENABLE_MOCK_FALLBACK || 'false'), sensitive: false },
+      { 
+        key: 'VITE_API_KEY', 
+        label: 'VITE_API_KEY', 
+        value: envConfig.VITE_API_KEY || '未设置', 
+        sensitive: true 
+      },
+      { 
+        key: 'VITE_DEV_MODE', 
+        label: 'VITE_DEV_MODE', 
+        value: isProduction ? 'false (生产环境强制关闭)' : String(envConfig.VITE_DEV_MODE || 'false'), 
+        sensitive: false,
+        warning: isProduction 
+      },
+      { 
+        key: 'VITE_ENABLE_MOCK_FALLBACK', 
+        label: 'VITE_ENABLE_MOCK_FALLBACK', 
+        value: String(envConfig.VITE_ENABLE_MOCK_FALLBACK || 'false'), 
+        sensitive: false 
+      },
     ];
 
     return (
@@ -170,7 +237,13 @@ const VersionControl = () => {
           {envItems.map((item) => (
             <Descriptions.Item key={item.key} label={item.label}>
               <Tooltip title={item.sensitive ? '点击复制完整值' : ''}>
-                <Tag color={item.sensitive ? 'blue' : 'default'} style={{ cursor: item.sensitive ? 'pointer' : 'default' }}>
+                <Tag 
+                  color={
+                    item.warning ? 'warning' : 
+                    item.sensitive ? 'blue' : 'default'
+                  } 
+                  style={{ cursor: item.sensitive ? 'pointer' : 'default' }}
+                >
                   {item.sensitive && item.value !== '未设置' ? `${item.value.substring(0, 8)}...` : item.value}
                 </Tag>
               </Tooltip>
@@ -203,6 +276,7 @@ const VersionControl = () => {
   // 计算整体健康度
   const isOverallHealthy = deployStatus?.appHealthy && deployStatus?.redisHealthy && deployStatus?.frontendHealthy;
   const apiStatus = versionInfo ? (versionInfo.apiKeyInlined ? '正常' : '需后端验证') : '未知';
+  const versionSource = versionInfo ? getVersionSource(versionInfo.version) : { label: '未知', color: 'default' as const };
 
   return (
     <PageContainer>
@@ -238,7 +312,7 @@ const VersionControl = () => {
           <Card>
             <Statistic
               title="当前版本"
-              value={versionInfo?.version || '加载中...'}
+              value={formatVersionDisplay(versionInfo?.version || '加载中...', versionInfo?.commit || '')}
               valueStyle={{ fontSize: 16, fontWeight: 500, fontFamily: 'monospace' }}
               prefix={<Tag color="info">VER</Tag>}
             />
@@ -288,6 +362,9 @@ const VersionControl = () => {
                 {deployStatus?.lastDeploy ? formatDateTime(deployStatus.lastDeploy) : '从未部署'}
               </Descriptions.Item>
               <Descriptions.Item label="环境">{versionInfo?.environment || '未知'}</Descriptions.Item>
+              <Descriptions.Item label="版本来源">
+                <Tag color={versionSource.color}>{versionSource.label}</Tag>
+              </Descriptions.Item>
             </Descriptions>
           </Card>
         </Col>
