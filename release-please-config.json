@@ -1,0 +1,23 @@
+{
+  "manifest": "release-please-manifest.json",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "package-name": "douyin-shop-monitor",
+      "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "draft": false,
+      "include-component-in-tag": false,
+      "include-v-in-tag": true,
+      "label": "release-please",
+      "pull-request-title-pattern": "chore${scope}: release ${version}",
+      "pull-request-body-path": ".github/release-template.md",
+      "release-as": "auto",
+      "version-file": "package.json",
+      "versioning-strategy": "auto",
+      "automerge": true
+    }
+  },
+  "plugins": ["conventional-commits"]
+}
