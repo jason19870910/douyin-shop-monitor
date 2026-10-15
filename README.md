@@ -20,7 +20,7 @@
 - **合规引擎**：关键词 / 规则检查与日志
 - **告警**：销量、转化、库存、视频互动等阈值告警（邮件通知）
 - **部署**：Docker Compose + Redis + Nginx；Secrets 文件注入敏感配置
-- **前端构建部署**：`npm run build` → `docker cp` 到容器 `eb6af2f375fe` → `nginx -s reload`
+- **前端构建部署**：`npm run build` → `docker cp` 到容器 `douyin_frontend` → `nginx -s reload`
 
 ## 目录结构
 
@@ -67,13 +67,15 @@ docker compose up -d
 
 ## 核心外部 API 映射
 
+详见 [ARCHITECTURE.md - 核心外部 API 映射](./docs/architecture/ARCHITECTURE.md#核心外部-api-映射)
+
 | 业务模块 | 外部接口 | 内部转发路径 | 说明 |
 |---------|---------|-------------|------|
 | 商品统计 | GET `/product/tproduct/aggsProductCount` | GET `/api/v1/products/stats` | tab=onSale/stock/violation |
 | 订单统计 | GET `/api/order/tabcnt` | GET `/api/v1/orders/stats` | all/pay/cancel 计数与金额 |
 | 创作者概览 | POST `/janus/douyin/creator/data/overview/dashboard` | GET `/api/v1/creators/overview` | recent_days 参数 |
 
-> 注：创作者概览外部为 POST，内部已统一为 GET 转发
+> 注：创作者概览外部为 POST，内部已统一为 GET 转发。完整映射表及配置说明请参考 ARCHITECTURE.md。
 
 ## 部署流程（前端）
 
@@ -85,7 +87,7 @@ cd src/frontend && npm run build
 scp -r build root@122.51.208.138:/tmp/frontend_build
 
 # 3. 推送到容器并重载
-ssh root@122.51.208.138 "docker cp /tmp/frontend_build eb6af2f375fe:/usr/share/nginx/html && docker exec eb6af2f375fe nginx -s reload"
+ssh root@122.51.208.138 "docker cp /tmp/frontend_build douyin_frontend:/usr/share/nginx/html && docker exec douyin_frontend nginx -s reload"
 ```
 
 ## 更多文档

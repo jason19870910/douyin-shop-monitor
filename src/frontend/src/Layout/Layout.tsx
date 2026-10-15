@@ -1,41 +1,28 @@
-import React, { useState, useEffect, Suspense, lazy } from 'react';
-import { Layout as AntLayout, Menu, Button, Avatar, Dropdown, Space, Badge, message } from 'antd';
+import { useState, useEffect, Suspense, lazy } from 'react';
+import { Layout as AntLayout, Menu, Button, Avatar, Dropdown, Space, message } from 'antd';
 import { Link, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import {
-  HomeOutlined,
-  VideoCameraOutlined,
-  UserOutlined,
-  SafetyOutlined,
-  ShopOutlined,
-  DatabaseOutlined,
-  FileTextOutlined,
-  VideoCameraAddOutlined,
-  PictureOutlined,
-  UserAddOutlined,
-  BellOutlined,
-  MenuUnfoldOutlined,
-  MenuFoldOutlined,
-  SettingOutlined,
-  SyncOutlined,
-  UsergroupAddOutlined,
-  ShoppingCartOutlined,
+  HomeOutlined, VideoCameraOutlined, UserOutlined, SafetyOutlined,
+  ShopOutlined, DatabaseOutlined, FileTextOutlined, VideoCameraAddOutlined,
+  PictureOutlined, UserAddOutlined, BellOutlined, MenuUnfoldOutlined,
+  MenuFoldOutlined, SyncOutlined, ShoppingCartOutlined,
+  SettingOutlined, BankOutlined, LineChartOutlined, CompassOutlined,
 } from '@ant-design/icons';
 import { syncApi, healthApi } from '@/api/index';
-import type { SyncHistoryItem } from '@/api/index';
 import { useApi } from '@/hooks/useApi';
 import { formatDateTime } from '@/utils/formatters';
 import styles from './Layout.module.css';
 
-// 页面组件 - DashboardPage 懒加载导入（放在第一个，避免被打包进主包）
+// 页面组件 - Home/Dashboard 直接导入，其余懒加载
 import HomePage from '../pages/Home';
 import DashboardPage from '../pages/Dashboard';
-import ColorShowcasePage from '../pages/ColorShowcase';
 const VideosPage = lazy(() => import('../pages/Videos'));
 const CreatorPage = lazy(() => import('../pages/Creator'));
 const AuthPage = lazy(() => import('../pages/Auth'));
 const ProductsPage = lazy(() => import('../pages/Products'));
 const OrdersPage = lazy(() => import('../pages/Orders'));
-const CompliancePage = lazy(() => import('../pages/Compliance'));
+const CompliancePage = lazy(() => import('../pages/Compliance'))
+const VersionControlPage = lazy(() => import('../pages/VersionControl'));
 const VideoEditPage = lazy(() => import('../pages/VideoEdit'));
 const ImageEditPage = lazy(() => import('../pages/ImageEdit'));
 const AccountPage = lazy(() => import('../pages/Account'));
@@ -43,6 +30,9 @@ const AlertsDouyinPage = lazy(() => import('../pages/AlertsDouyin'));
 const AlertsDianPage = lazy(() => import('../pages/AlertsDian'));
 const AlertHistoryPage = lazy(() => import('../pages/AlertHistory'));
 const ProfilePage = lazy(() => import('../pages/Profile'));
+const EarningsPage = lazy(() => import('../pages/Earnings'));
+const EarningsTrendPage = lazy(() => import('../pages/EarningsTrend'));
+const CompassPage = lazy(() => import('../pages/Compass'));
 
 const { Sider, Content } = AntLayout;
 
@@ -52,21 +42,25 @@ const SIDEBAR_MENUS = {
     { key: '/douyin', icon: <VideoCameraOutlined />, label: '抖音管理' },
     { key: '/dian', icon: <ShopOutlined />, label: '抖店管理' },
     { key: '/alerts', icon: <BellOutlined />, label: '告警设置' },
+    { key: '/version', icon: <SettingOutlined />, label: '版本控制' },
   ],
   douyin: [
     { key: '/', icon: <HomeOutlined />, label: '首页' },
     { key: '/douyin/videos', icon: <VideoCameraOutlined />, label: '视频管理' },
     { key: '/douyin/creator', icon: <UserOutlined />, label: '创作者中心'},
-    { key: '/auth', icon: <SafetyOutlined />, label: '授权管理' },
+    { key: '/douyin/earnings', icon: <BankOutlined />, label: '收益概览'},
+    { key: '/douyin/earnings/trend', icon: <LineChartOutlined />, label: '收益趋势' },
+    { key: '/auth', icon: <SafetyOutlined />, label: '授权状态' },
   ],
   dian: [
     { key: '/', icon: <HomeOutlined />, label: '首页' },
     { key: '/dian/products', icon: <ShoppingCartOutlined />, label: '商品管理' },
     { key: '/dian/orders', icon: <DatabaseOutlined />, label: '数据中心' },
     { key: '/dian/compliance', icon: <FileTextOutlined />, label: '合规管理' },
-    { key: '/dian/video-edit', icon: <VideoCameraAddOutlined />, label: '视频编辑' },
-    { key: '/dian/image-edit', icon: <PictureOutlined />, label: '图片编辑' },
+    { key: '/dian/video-edit', icon: <VideoCameraAddOutlined />, label: '视频素材' },
+    { key: '/dian/image-edit', icon: <PictureOutlined />, label: '图片素材' },
     { key: '/dian/account', icon: <UserAddOutlined />, label: '账号管理' },
+    { key: '/dian/compass', icon: <CompassOutlined />, label: '经营概况' },
   ],
   alerts: [
     { key: '/', icon: <HomeOutlined />, label: '首页' },
@@ -74,14 +68,21 @@ const SIDEBAR_MENUS = {
     { key: '/alerts/dian', icon: <BellOutlined />, label: '抖店告警设置' },
     { key: '/alerts/history', icon: <BellOutlined />, label: '告警历史' },
   ],
+  system: [
+    { key: '/', icon: <HomeOutlined />, label: '首页' },
+    { key: '/version', icon: <SettingOutlined />, label: '版本控制' },
+  ],
 };
 
-function getSidebarType(pathname) {
+function getSidebarType(pathname: string): keyof typeof SIDEBAR_MENUS {
   if (pathname.startsWith('/douyin') || pathname === '/auth') {
     return 'douyin';
   }
   if (pathname.startsWith('/dian')) {
     return 'dian';
+  }
+  if (pathname.startsWith('/version')) {
+    return 'system';
   }
   if (pathname.startsWith('/alerts')) {
     return 'alerts';
@@ -91,12 +92,12 @@ function getSidebarType(pathname) {
 
 export const AppLayout = () => {
   const [collapsed, setCollapsed] = useState(false);
-  const [sidebarType, setSidebarType] = useState('home');
+  const [sidebarType, setSidebarType] = useState<keyof typeof SIDEBAR_MENUS>('home');
 
   const location = useLocation();
   const navigate = useNavigate();
 
-  const { data: healthData, refetch: checkHealth } = useApi(healthApi.check, []);
+  const { data: healthData, refetch: checkHealth } = useApi(async () => healthApi.check(), []);
   // Don't auto-call syncApi.manualSync on mount - only call on user action
   const [syncLoading, setSyncLoading] = useState(false);
 
@@ -124,12 +125,12 @@ export const AppLayout = () => {
       try {
         await syncApi.manualSync();
         checkHealth();
-        message.success('鏁版嵁鍚屾鎴愬姛');
+        message.success('数据同步成功');
         break; // Success, exit retry loop
       } catch (err) {
         retries++;
         if (retries > maxRetries) {
-          message.error('鍚屾澶辫触锛岃绋嶅悗閲嶈瘯');
+          message.error('同步失败，请稍后重试');
           if (import.meta.env.DEV) {
             console.error('Sync failed after retries:', err);
           }
@@ -148,21 +149,6 @@ export const AppLayout = () => {
 
   const menuItems = SIDEBAR_MENUS[sidebarType] || SIDEBAR_MENUS.home;
 
-  const userMenu = (
-    <Menu>
-      <Menu.Item key="profile">
-        <Link to="/profile">个人中心</Link>
-      </Menu.Item>
-      <Menu.Item
-        key="logout"
-        onClick={() => {
-          if (typeof window !== 'undefined') window.location.href = '/logout';
-        }}
-      >
-        閫€鍑虹櫥褰?      </Menu.Item>
-    </Menu>
-  );
-
   return (
     <AntLayout className={styles.layout} style={{ minHeight: '100vh' }}>
       <Sider
@@ -172,13 +158,12 @@ export const AppLayout = () => {
         className={styles.sider}
         breakpoint="lg"
         collapsedWidth={80}
-        onBreakpoint={(broken) => {}}
         onCollapse={(collapsed) => setCollapsed(collapsed)}
       >
         <div className={styles.siderContent}>
           <div className={styles.siderHeader}>
             <div className={styles.siderLogo}>
-              <span className={styles.siderLogoIcon}>馃搳</span>
+              <span className={styles.siderLogoIcon}>📊</span>
               {!collapsed && <span className={styles.siderLogoText}>抖音监控数据看板</span>}
             </div>
             <Button
@@ -212,7 +197,7 @@ export const AppLayout = () => {
                 type="primary"
                 size={collapsed ? 'small' : 'middle'}
               >
-                {!collapsed && '折叠收起'}
+                立即同步
               </Button>
             </div>
             <div className={styles.siderUserArea}>
@@ -243,7 +228,7 @@ export const AppLayout = () => {
       <AntLayout className={`${styles.mainLayout} ${collapsed ? styles['sider-collapsed'] : ''}`}>
         <Content className={styles.content}>
           <Routes>
-            {/* 首页/浠〃鐩?- 鐩存帴娓叉煋閬垮厤閲嶅畾鍚戦棶棰?*/}
+            {/* 首页/仪表盘 - 直接渲染避免重定向问题 */}
             <Route path="/" element={<HomePage />} />
             <Route path="/dashboard" element={<DashboardPage />} />
 
@@ -251,6 +236,8 @@ export const AppLayout = () => {
             <Route path="/douyin" element={<Navigate to="/douyin/videos" replace />} />
             <Route path="/douyin/videos" element={<VideosPage />} />
             <Route path="/douyin/creator" element={<CreatorPage />} />
+            <Route path="/douyin/earnings" element={<EarningsPage />} />
+            <Route path="/douyin/earnings/trend" element={<EarningsTrendPage />} />
 
             {/* 授权管理 */}
             <Route path="/auth" element={<AuthPage />} />
@@ -263,6 +250,8 @@ export const AppLayout = () => {
             <Route path="/dian/video-edit" element={<VideoEditPage />} />
             <Route path="/dian/image-edit" element={<ImageEditPage />} />
             <Route path="/dian/account" element={<AccountPage />} />
+            <Route path="/dian/compass" element={<CompassPage />} />
+            <Route path="/version" element={<VersionControlPage />} />
 
             {/* 告警设置 */}
             <Route path="/alerts" element={<Navigate to="/alerts/douyin" replace />} />
@@ -273,10 +262,7 @@ export const AppLayout = () => {
             {/* 个人中心 */}
             <Route path="/profile" element={<ProfilePage />} />
 
-            {/* 色彩规范 */}
-            <Route path="/colors" element={<ColorShowcasePage />} />
-
-            {/* 鍏滃簳 */}
+            {/* 兜底 */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Content>
@@ -285,7 +271,6 @@ export const AppLayout = () => {
   );
 };
 
-// 榛樿瀵煎嚭
 export default function Layout() {
   return (
     <Suspense fallback={<div className="loading">加载中..</div>}>

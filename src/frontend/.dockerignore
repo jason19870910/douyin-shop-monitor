@@ -1,0 +1,55 @@
+# Git
+.git
+.gitignore
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build (注意: frontend Dockerfile 直接 COPY build，不要排除 build/)
+dist/
+build/
+
+# Tests
+coverage/
+.nyc_output/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Windows system files (critical!)
+C:
+$RECYCLE.BIN
+$WinREAgent
+$Windows.~WS
+$WINDOWS.~BT
+desktop.ini
+ehthumbs.db
+Boot/
+Bootmgr
+Bootnxt
+pagefile.sys
+hiberfil.sys
+swapfile.sys
+AX NF ZZ
+AndrowsData
+Autodesk
+BluestacksCN
+6096779bb084295792
+AMTAG.BIN
+071BC6DC2DC9
+
+# Project specific
+*.bak
+.env
+.env.*

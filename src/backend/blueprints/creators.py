@@ -1,6 +1,6 @@
 """Creators blueprint."""
 from flask import Blueprint, request
-from services.fetcher import cache, CACHE_KEYS, get_data_with_fallback, MOCK_CREATORS, _fetch_creators_from_api, _fetch_creator_overview_from_api
+from services.fetcher import cache, CACHE_KEYS, get_data_with_fallback, MOCK_CREATORS, _fetch_creators_from_api, _fetch_creator_overview_from_api, _fetch_creator_works_from_api
 from config import Config
 from services.fetcher import _request
 from utils.responses import success_response, not_found_response
@@ -24,7 +24,7 @@ def get_creator_overview():
     """获取创作者中心概览数据（近 N 天） - 返回前端期望格式。"""
     recent_days = int(request.args.get('recent_days', 7))
 
-    # 优先调用外部概览 API（实时数据，包含 total_followers, total_videos, recent_view, recent_like）
+    # 优先调用外部概览 API（实时数据，包含所有字段）
     try:
         overview_data = _fetch_creator_overview_from_api(recent_days)
         return success_response({
@@ -33,17 +33,30 @@ def get_creator_overview():
             'total_videos': overview_data.get('total_videos', 0),
             'recent_view': overview_data.get('recent_view', 0),
             'recent_like': overview_data.get('recent_like', 0),
+            'recent_share': overview_data.get('recent_share', 0),
+            'recent_comment': overview_data.get('recent_comment', 0),
+            'recent_homepage_view': overview_data.get('recent_homepage_view', 0),
+            'cover_click_ratio': overview_data.get('cover_click_ratio', 0),
+            'net_followers_gain': overview_data.get('net_followers_gain', 0),
+            'cancel_followers': overview_data.get('cancel_followers', 0),
+            'completion_rate_5s': overview_data.get('completion_rate_5s', 0),
+            'bounce_rate_2s': overview_data.get('bounce_rate_2s', 0),
+            'avg_view_second': overview_data.get('avg_view_second', 0),
+            'total_views': overview_data.get('total_views', 0),
+            'total_likes': overview_data.get('total_likes', 0),
+            'total_comments': overview_data.get('total_comments', 0),
+            'total_shares': overview_data.get('total_shares', 0),
             'data_source': 'external'
         })
     except Exception as e:
         logger = __import__('logging').getLogger(__name__)
-        logger.error(f"Failed to fetch creator overview from external API: {e}")
+        logger.error("Failed to fetch creator overview from external API: %s", e)
 
-    # 回退：使用缓存计算（仅包含基础统计，不含 recent_view/recent_like）
+    # 回退：使用缓存计算（仅包含基础统计，不含 recent_view/recent_like 等详细字段）
     creators = cache.get(CACHE_KEYS['creators'], [])
     if creators:
-        total_followers = sum(c.get('follower_count', 0) for c in creators)
-        total_videos = sum(c.get('video_count', 0) for c in creators)
+        total_followers = sum(c.get('total_followers', c.get('follower_count', 0)) for c in creators)
+        total_videos = sum(c.get('total_videos', c.get('video_count', 0)) for c in creators)
 
         return success_response({
             'recent_days': recent_days,
@@ -51,6 +64,19 @@ def get_creator_overview():
             'total_videos': total_videos,
             'recent_view': 0,
             'recent_like': 0,
+            'recent_share': 0,
+            'recent_comment': 0,
+            'recent_homepage_view': 0,
+            'cover_click_ratio': 0,
+            'net_followers_gain': 0,
+            'cancel_followers': 0,
+            'completion_rate_5s': 0,
+            'bounce_rate_2s': 0,
+            'avg_view_second': 0,
+            'total_views': 0,
+            'total_likes': 0,
+            'total_comments': 0,
+            'total_shares': 0,
             'data_source': 'cache'
         })
 
@@ -61,6 +87,19 @@ def get_creator_overview():
         'total_videos': 0,
         'recent_view': 0,
         'recent_like': 0,
+        'recent_share': 0,
+        'recent_comment': 0,
+        'recent_homepage_view': 0,
+        'cover_click_ratio': 0,
+        'net_followers_gain': 0,
+        'cancel_followers': 0,
+        'completion_rate_5s': 0,
+        'bounce_rate_2s': 0,
+        'avg_view_second': 0,
+        'total_views': 0,
+        'total_likes': 0,
+        'total_comments': 0,
+        'total_shares': 0,
         'data_source': 'empty'
     })
 
@@ -75,4 +114,39 @@ def get_creator(creator_id: str):
     return success_response(creator)
 
 
+@creators_bp.route('/creators/works/external', methods=['GET'])
+def get_creator_works_external():
+    """Get creator works list from external API only (no fallback)."""
+    recent_days = int(request.args.get('recent_days', 7))
+    works = _fetch_creator_works_from_api(recent_days)
+    return success_response({
+        'recent_days': recent_days,
+        'items': works,
+        'total': len(works),
+        'data_source': 'external'
+    })
+
+
 @creators_bp.route('/creators/works', methods=['GET'])
+def get_creator_works():
+    """Get creator works list."""
+    recent_days = int(request.args.get('recent_days', 7))
+    try:
+        works = _fetch_creator_works_from_api(recent_days)
+        return success_response({
+            'recent_days': recent_days,
+            'items': works,
+            'total': len(works),
+            'data_source': 'external'
+        })
+    except Exception as e:
+        logger = __import__('logging').getLogger(__name__)
+        logger.error("Failed to fetch creator works from external API: %s", e)
+    # 回退缓存
+    works = cache.get(CACHE_KEYS['creator_works'], [])
+    return success_response({
+        'recent_days': recent_days,
+        'items': works,
+        'total': len(works),
+        'data_source': 'cache' if works else 'empty'
+    })

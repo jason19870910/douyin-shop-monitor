@@ -403,6 +403,119 @@ def get_auth_qr_code():
     }, 'QR code data generated')
 
 
+@auth_bp.route('/auth/profile', methods=['GET'])
+def get_user_profile():
+    """Get current user profile information."""
+    auth_config = get_config('auth_config')
+    
+    if not auth_config.get('authorized'):
+        return bad_request_response('User not authorized')
+    
+    # Build user profile from auth config
+    # In a real system, this would come from a user database
+    open_id = auth_config.get('open_id', '')
+    scope = auth_config.get('scope', [])
+    last_updated = auth_config.get('last_updated', '')
+    expires_at = auth_config.get('expires_at', 0)
+    
+    # Calculate token expiry info
+    from datetime import datetime
+    now = datetime.now().timestamp()
+    is_expired = expires_at > 0 and now >= expires_at
+    expires_in = max(0, int(expires_at - now)) if expires_at > 0 else 0
+    
+    # Determine role based on scope
+    role = 'user'
+    if 'user_info' in scope:
+        role = 'authorized_user'
+    if 'admin' in scope or 'manage' in scope:
+        role = 'admin'
+    
+    # Generate a username from open_id if available
+    username = f"douyin_user_{open_id[-8:]}" if open_id else 'unknown_user'
+    
+    profile = {
+        'user_id': open_id or f"user_{int(now)}",
+        'username': username,
+        'email': '',  # Would come from user database in real implementation
+        'phone': '',  # Would come from user database in real implementation
+        'role': role,
+        'create_time': last_updated or datetime.fromtimestamp(now).isoformat(),
+        'last_login': last_updated or datetime.fromtimestamp(now).isoformat(),
+        'open_id': open_id,
+        'authorized': auth_config.get('authorized', False),
+        'scope': scope,
+        'expires_in': expires_in,
+        'is_expired': is_expired,
+    }
+    
+    return success_response(profile)
+
+
+@auth_bp.route('/auth/profile', methods=['PUT', 'POST'])
+def update_user_profile():
+    """Update user profile information."""
+    auth_config = get_config('auth_config')
+    
+    if not auth_config.get('authorized'):
+        return bad_request_response('User not authorized')
+    
+    data = request.get_json() or {}
+    
+    # Only allow updating certain fields (email, phone, etc.)
+    # The open_id and authorization status are managed by OAuth
+    allowed_fields = ['email', 'phone']
+    
+    # Store profile updates in a separate user profile config
+    # This is a simple implementation - in production, use a user database
+    user_profile = cache.get('user_profile', {})
+    
+    for field in allowed_fields:
+        if field in data:
+            user_profile[field] = data[field]
+    
+    user_profile['updated_at'] = datetime.now().isoformat()
+    cache.set('user_profile', user_profile)
+    
+    # Also persist to file
+    from services.fetcher import save_json_file, DATA_DIR
+    save_json_file(DATA_DIR / 'user_profile.json', user_profile)
+    
+    # Merge with auth config for response
+    open_id = auth_config.get('open_id', '')
+    scope = auth_config.get('scope', [])
+    last_updated = auth_config.get('last_updated', '')
+    expires_at = auth_config.get('expires_at', 0)
+    now = datetime.now().timestamp()
+    is_expired = expires_at > 0 and now >= expires_at
+    expires_in = max(0, int(expires_at - now)) if expires_at > 0 else 0
+    
+    role = 'user'
+    if 'user_info' in scope:
+        role = 'authorized_user'
+    if 'admin' in scope or 'manage' in scope:
+        role = 'admin'
+    
+    username = f"douyin_user_{open_id[-8:]}" if open_id else 'unknown_user'
+    
+    profile = {
+        'user_id': open_id or f"user_{int(now)}",
+        'username': username,
+        'email': user_profile.get('email', ''),
+        'phone': user_profile.get('phone', ''),
+        'role': role,
+        'create_time': last_updated or datetime.fromtimestamp(now).isoformat(),
+        'last_login': last_updated or datetime.fromtimestamp(now).isoformat(),
+        'open_id': open_id,
+        'authorized': auth_config.get('authorized', False),
+        'scope': scope,
+        'expires_in': expires_in,
+        'is_expired': is_expired,
+    }
+    
+    return success_response(profile, 'Profile updated successfully')
+
+
 def _frontend_redirect(status: str, message: str = '') -> object:
     """Redirect browser-based OAuth callback results back to the frontend auth page."""
     frontend_origin = os.getenv('FRONTEND_URL', 'https://wlkj-tech.cn')

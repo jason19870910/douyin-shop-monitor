@@ -1,0 +1,145 @@
+@import '@/styles/common.module.css';
+
+.statsRow {
+  margin-bottom: var(--spacing-4);
+}
+
+.chartsRow {
+  margin-bottom: var(--spacing-4);
+}
+
+.tabs {
+  margin-bottom: var(--spacing-4);
+}
+
+.tabs :global(.ant-tabs-nav) {
+  margin-bottom: 0;
+}
+
+.tabs :global(.ant-tabs-tab) {
+  padding: var(--spacing-2) var(--spacing-4);
+}
+
+.tabs :global(.ant-tabs-tab-active) {
+  font-weight: 600;
+}
+
+.chartCard {
+  height: 100%;
+}
+
+.chartContainer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.chartLegend {
+  display: flex;
+  justify-content: center;
+  gap: var(--spacing-4);
+  flex-wrap: wrap;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.legendColor {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--border-radius-sm);
+}
+
+.chartBars {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  gap: var(--spacing-6);
+  height: 160px;
+  padding: var(--spacing-3) 0;
+}
+
+.barWrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-1);
+  width: 60px;
+}
+
+.bar {
+  width: 100%;
+  border-radius: var(--border-radius-sm) var(--border-radius-sm) 0 0;
+  transition: height 0.3s ease;
+}
+
+.barLabel {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.rulesCard {
+  margin-top: var(--spacing-4);
+}
+
+.rulesAlert {
+  margin-bottom: var(--spacing-3);
+}
+
+.violationsList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.violationItem {
+  padding: var(--spacing-3);
+  background: var(--bg-secondary);
+  border-radius: var(--border-radius-md);
+  border: 1px solid var(--border-color);
+}
+
+.violationHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-1);
+}
+
+.violationRule {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.violationDetail {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  margin-bottom: var(--spacing-1);
+}
+
+.violationMeta {
+  display: flex;
+  gap: var(--spacing-3);
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+}
+
+.ant-descriptions-item-label {
+  font-weight: 500;
+}
+
+@media (max-width: 768px) {
+  .chartBars {
+    height: 120px;
+  }
+
+  .barWrapper {
+    width: 40px;
+  }
+}

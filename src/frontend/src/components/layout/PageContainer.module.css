@@ -1,0 +1,33 @@
+@import '../../theme/variables.css';
+
+.container {
+  min-height: 100%;
+}
+
+.paddingNone {
+  padding: 0;
+}
+
+.paddingSm {
+  padding: var(--spacing-4);
+}
+
+.paddingMd {
+  padding: var(--spacing-6);
+}
+
+.paddingLg {
+  padding: var(--spacing-8);
+}
+
+.bgPrimary {
+  background: var(--color-bg-primary);
+}
+
+.bgSecondary {
+  background: var(--color-bg-secondary);
+}
+
+.bgTertiary {
+  background: var(--color-bg-tertiary);
+}

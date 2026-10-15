@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Douyin Monitor">
+  <defs>
+    <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#1d9bf0"/>
+      <stop offset="100%" stop-color="#0a5ad9"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#g)"/>
+  <path d="M23 18h8.5c6.2 0 11 4.8 11 11.2v.8c0 7-5.2 12.4-12.3 12.4h-7.2V18zm8.1 7.7h-2.1v9.8h2.1c3.2 0 5.5-2.2 5.5-4.8 0-2.9-2.2-5-5.5-5zm-7.5 0h2.2v9.8h-2.2V25.7z" fill="#fff"/>
+  <circle cx="44" cy="20" r="4.5" fill="#ffdc5d"/>
+</svg>

@@ -21,7 +21,7 @@ formatters:
 handlers:
   console:
     class: logging.StreamHandler
-    level: INFO
+    level: DEBUG
     formatter: standard
     stream: ext://sys.stdout
 
@@ -36,6 +36,11 @@ handlers:
 
 loggers:
   app:
+    level: DEBUG
+    handlers: [console, file]
+    propagate: no
+
+  services.fetcher:
     level: DEBUG
     handlers: [console, file]
     propagate: no

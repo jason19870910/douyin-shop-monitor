@@ -8,32 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- 初始化项目结构
-- 实现前端仪表盘布局优化（3列核心指标网格）
-- 修复动态趋势着色（CreatorDataCard组件）
-- 统一页面布局使用PageContainer、PageHeader、TableCard组件
-- 创建后端服务文档（src/backend/README.md）
-- 创建后端变更日志（src/backend/CHANGELOG.md）
-- 更新项目文档以反映实际结构
-- 修复所有损坏的文档链接
-- 清理重复和过时的文档
-
-### Changed
-- 调整Dashboard布局：核心指标网格从6列改为3列
-- 增加各网格间距和图表最小高度以提升可读性
-- 更新环境变量文档和设置说明
-- 修复本地开发路径说明
+- **2026-10-15**：
+  - 首页 KPI 数据流修复：后端统计端点改为读取本地同步缓存聚合，解决首页数据全为 0 问题
+  - 独立统计端点：新增 `/products/stats`（商品总数/在售/库存/违规）、`/orders/stats`（订单数/金额/状态分布）、`/creators/overview`（达人/粉丝/视频/播放）
+  - 价格单位统一处理：API 返回分，前端显示自动除以 100（Products、Dashboard、Orders、Home 多处修复）
+  - 首页趋势和 TOP 数据恢复：复用 `/dashboard/stats` 端点提供 `sales_trend` 和 `top_products`
+  - 导出 CSV 价格字段同步修正（分转元）
+  - **新增好货商品在线预览 API**：`/api/v1/external/haohuo/product/preview`（POST），支持商品详情图片、规格、价格/销量/协议配置、跳转链接获取，基于 `haohuo.jinritemai.com` 外部接口
 
 ### Fixed
-- 修复500 API错误：将FXG_SHOP_ID设置为正确的整数值
-- 修复环境变量加载问题：确保使用正确的.env文件路径
-- 修复后端服务认证配置
-- 修复文档索引中的损坏链接
-- 修复重复的环境变量条目在docker-compose.yml中
-- 2026-09-21 修复 Nginx 502 Bad Gateway：修正 /etc/nginx/conf.d/cci-monitor.conf proxy_set_header 语法错误，恢复反向代理到 127.0.0.1:3000/5000
-- 2026-09-21 修复 API 401 Unauthorized：统一后端 API_KEY 与前端 VITE_API_KEY 为 wlkj_douyin_api_20260921_abc123，移除 SKIP_AUTH，frontend/.env 配置 VITE_API_KEY 并重新 vite build 部署
-- 2026-09-21 修复前端构建后部署流程，避免 nested build 目录与缓存导致页面无更新
+- 2026-10-15 **首页 KPI 全为 0**：后端 stats 端点直接调用外部 API 而非读取本地缓存，改为聚合本地同步数据
+- 2026-10-15 **商品价格显示 100 倍**：Products、Dashboard、Orders、Home 多处 `formatCurrency` 未除以 100
+- 2026-10-15 **订单金额字段缺失**：Dashboard、Orders 使用 `amount` 字段，实际 API 返回 `pay_amount`/`total_price`（元单位）
+- 2026-10-15 **首页销售趋势/热销商品显示占位**：Home.tsx 仅用独立端点缺失趋势和 TOP 数据，复用 dashboard/stats 恢复
+- 2026-10-15 **TypeScript 构建错误**：OrderStatusItem 导入方式修正、DataTable pagination 属性移除、未使用变量清理
+
+- 2026-10-14 Fixed health check response format: status="healthy", added last_update, CST timezone
+- 2026-10-14 Extended external health check to 9 endpoints (added creator income summary/detail + compass)
+- 2026-10-14 Fixed manual sync last_update timing (now reads after scheduled_job completes)
+- 2026-10-14 Fixed Google Fonts timeout by switching to domestic CDN mirror
+- 2026-10-14 Fixed Nginx caching and auth header forwarding
+- 2026-10-14 **Fixed Nginx DNS cache causing proxy failures**: added runtime resolver with 10s TTL, backend restarts no longer require frontend restart
 
 ## [v1.0.0] - 2026-09-05
 ### Added
-- 首次正式版本发布
+- First formal version release

@@ -1,0 +1,81 @@
+@import '../../theme/variables.css';
+
+.card {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-5);
+  box-shadow: var(--shadow-card);
+  transition: all var(--transition-base);
+  position: relative;
+  overflow: hidden;
+}
+
+.card:hover {
+  box-shadow: var(--shadow-card);
+  transform: translateY(-2px);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--glow-blue);
+}
+
+.card.up {
+  border-top: 3px solid var(--trend-up);
+}
+
+.card.down {
+  border-top: 3px solid var(--trend-down);
+}
+
+.icon {
+  font-size: var(--font-size-2xl);
+  margin-bottom: var(--spacing-2);
+  opacity: 0.8;
+}
+
+.label {
+  font-size: var(--font-size-base);
+  color: var(--text-muted);
+  margin-bottom: var(--spacing-2);
+  font-weight: var(--font-weight-medium);
+}
+
+.subValue {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--border-color);
+}
+
+.subLabel {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
+.trend {
+  font-size: var(--font-size-xs);
+  margin-top: var(--spacing-2);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-weight: var(--font-weight-medium);
+}
+
+.trend.up {
+  color: var(--trend-up);
+}
+
+.trend.down {
+  color: var(--trend-down);
+}
+
+.error {
+  position: absolute;
+  top: var(--spacing-3);
+  right: var(--spacing-3);
+  font-size: var(--font-size-xs);
+  color: var(--danger);
+  background: var(--color-error-50);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-sm);
+}

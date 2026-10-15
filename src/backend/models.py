@@ -39,55 +39,55 @@ class AlertLevel(str, Enum):
 
 class Product(BaseModel):
     """Product data model."""
-    product_id: str
-    product_name: str
-    category: Optional[str] = None
-    price: float = 0.0
-    sales_today: int = 0
-    sales_yesterday: int = 0
-    inventory: int = 0
-    conversion_rate: float = 0.0
-    conversion_rate_today: float = 0.0
-    conversion_rate_yesterday: float = 0.0
-    status: Optional[ProductStatus] = None
-    fetched_at: Optional[str] = None
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    product_id: str = Field(alias='productId')
+    product_name: str = Field(alias='productName')
+    category: Optional[str] = Field(default=None, alias='category')
+    price: float = Field(default=0.0, alias='price')
+    sales_today: int = Field(default=0, alias='salesToday')
+    sales_yesterday: int = Field(default=0, alias='salesYesterday')
+    inventory: int = Field(default=0, alias='inventory')
+    conversion_rate: float = Field(default=0.0, alias='conversionRate')
+    conversion_rate_today: float = Field(default=0.0, alias='conversionRateToday')
+    conversion_rate_yesterday: float = Field(default=0.0, alias='conversionRateYesterday')
+    status: Optional[ProductStatus] = Field(default=None, alias='status')
+    fetched_at: Optional[str] = Field(default=None, alias='fetchedAt')
+    created_at: Optional[str] = Field(default=None, alias='createdAt')
+    updated_at: Optional[str] = Field(default=None, alias='updatedAt')
     
     # Allow extra fields from API
-    model_config = {"extra": "allow"}
+    model_config = {"extra": "allow", "populate_by_name": True}
 
 
 class Order(BaseModel):
     """Order data model."""
-    order_id: str
-    product_name: Optional[str] = None
-    product_id: Optional[str] = None
-    amount: float = 0.0
-    status: Optional[OrderStatus] = None
-    create_time: Optional[str] = None
-    update_time: Optional[str] = None
-    buyer_id: Optional[str] = None
-    buyer_name: Optional[str] = None
-    quantity: int = 1
-    fetched_at: Optional[str] = None
+    order_id: str = Field(alias='orderId')
+    product_name: Optional[str] = Field(default=None, alias='productName')
+    product_id: Optional[str] = Field(default=None, alias='productId')
+    amount: float = Field(default=0.0, alias='amount')
+    status: Optional[OrderStatus] = Field(default=None, alias='status')
+    create_time: Optional[str] = Field(default=None, alias='createTime')
+    update_time: Optional[str] = Field(default=None, alias='updateTime')
+    buyer_id: Optional[str] = Field(default=None, alias='buyerId')
+    buyer_name: Optional[str] = Field(default=None, alias='buyerName')
+    quantity: int = Field(default=1, alias='quantity')
+    fetched_at: Optional[str] = Field(default=None, alias='fetchedAt')
     
-    model_config = {"extra": "allow"}
+    model_config = {"extra": "allow", "populate_by_name": True}
 
 
 class Creator(BaseModel):
     """Creator data model."""
-    creator_id: str
-    creator_name: str
-    follower_count: int = 0
-    following_count: int = 0
-    video_count: int = 0
-    total_likes: int = 0
-    category: Optional[str] = None
-    level: Optional[str] = None
-    fetched_at: Optional[str] = None
+    creator_id: str = Field(alias='creatorId')
+    creator_name: str = Field(alias='creatorName')
+    follower_count: int = Field(default=0, alias='followerCount')
+    following_count: int = Field(default=0, alias='followingCount')
+    video_count: int = Field(default=0, alias='videoCount')
+    total_likes: int = Field(default=0, alias='totalLikes')
+    category: Optional[str] = Field(default=None, alias='category')
+    level: Optional[str] = Field(default=None, alias='level')
+    fetched_at: Optional[str] = Field(default=None, alias='fetchedAt')
     
-    model_config = {"extra": "allow"}
+    model_config = {"extra": "allow", "populate_by_name": True}
 
 
 class Video(BaseModel):
@@ -96,7 +96,7 @@ class Video(BaseModel):
     title: str
     creator_id: Optional[str] = None
     creator_name: Optional[str] = None
-    view_count: int = 0
+    play_count: int = 0  # 外部 API 返回 play_count，前端也期望 play_count
     like_count: int = 0
     comment_count: int = 0
     share_count: int = 0
@@ -106,6 +106,11 @@ class Video(BaseModel):
     cover_url: Optional[str] = None
     video_url: Optional[str] = None
     fetched_at: Optional[str] = None
+    
+    # 兼容旧字段名
+    @property
+    def view_count(self) -> int:
+        return self.play_count
     
     model_config = {"extra": "allow"}
 

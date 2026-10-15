@@ -1,0 +1,2 @@
+cd c:\Users\Administrator\Documents\trae_projects\douyin\src\frontend
+node_modules\.bin\tsc --noEmit > output.log 2>&1

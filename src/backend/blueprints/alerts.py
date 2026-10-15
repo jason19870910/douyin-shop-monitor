@@ -194,6 +194,13 @@ def delete_alerts_history():
     return success_response({'cleared': count}, f'Cleared {count} alert records')
 
 
+@alerts_bp.route('/alerts/clear-history', methods=['POST'])
+def clear_alerts_history():
+    """Clear all alert history (POST alias for frontend compatibility)."""
+    count = clear_alert_history()
+    return success_response({'cleared': count}, f'Cleared {count} alert records')
+
+
 @alerts_bp.route('/alerts/history/stats', methods=['GET'])
 def get_alerts_stats():
     """Get alert statistics summary."""

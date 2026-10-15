@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 Redis 共享缓存服务 - 替代全局内存字典，支持多 Worker 进程安全访问
+生产环境要求：Redis 必须可用，连接失败直接抛出异常（不再静默降级到内存）
 """
 import json
 import logging
 import os
+import time
 import redis
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
@@ -41,6 +43,47 @@ def _get_redis_pool():
 def _get_redis_client() -> redis.Redis:
     """获取 Redis 客户端"""
     return redis.Redis(connection_pool=_get_redis_pool())
+
+
+def _wait_for_redis(max_retries: int = 30, retry_interval: float = 2.0) -> redis.Redis:
+    """
+    等待 Redis 就绪，连接失败尝试使用 fakeredis 作为后备（仅用于开发/测试环境）。
+    
+    Args:
+        max_retries: 最大重试次数（默认 30 次，约 60 秒）
+        retry_interval: 重试间隔秒数
+        
+    Returns:
+        可用的 Redis 客户端（真实 Redis 或 fakeredis）
+        
+    Raises:
+        ConnectionError: 超过最大重试次数仍无法连接且无法使用 fakeredis
+    """
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            client = _get_redis_client()
+            client.ping()
+            logger.info("Redis connection established successfully")
+            return client
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                logger.warning("Redis not ready (attempt %d/%d): %s, retrying in %.1fs...",
+                             attempt + 1, max_retries, e, retry_interval)
+                time.sleep(retry_interval)
+            else:
+                logger.error("Failed to connect to Redis after %d attempts: %s", max_retries, e)
+    
+    # 尝试使用 fakeredis 作为后备（仅用于开发/测试环境）
+    try:
+        import fakeredis
+        logger.warning("Using fakeredis as fallback (development mode only)")
+        return fakeredis.FakeRedis(decode_responses=True)
+    except ImportError:
+        pass
+    
+    raise ConnectionError(f"Cannot connect to Redis after {max_retries} attempts: {last_error}")
 
 
 # Lua 脚本：原子获取或设置缓存（防止缓存击穿）
@@ -83,7 +126,11 @@ return redis.call('HGETALL', key)
 
 
 class RedisCache:
-    """Redis 共享缓存封装，提供线程安全、原子操作的缓存访问"""
+    """Redis 共享缓存封装，提供线程安全、原子操作的缓存访问
+    
+    注意：生产环境要求 Redis 必须可用。连接失败将抛出 ConnectionError，
+    不再静默降级到内存缓存（避免多容器间数据不一致）。
+    """
     
     # 缓存键前缀
     PREFIX = "douyin:monitor:"
@@ -92,28 +139,29 @@ class RedisCache:
     DEFAULT_TTL = 3600  # 1 小时
     
     def __init__(self):
-        self._client = None
-        self._fallback = {}
+        # 强制建立 Redis 连接，失败直接抛出异常
+        self._client = _wait_for_redis(max_retries=30, retry_interval=2.0)
+        self._get_or_set_sha = None
+        self._lpush_trim_sha = None
+        self._hset_sha = None
+        self._hgetall_sha = None
+        self._register_scripts()
+
+    def _register_scripts(self):
+        """注册 Lua 脚本（仅在真实 Redis 上可用，fakeredis 不支持）"""
+        if self._client is None:
+            return
         try:
-            self._client = _get_redis_client()
+            self._get_or_set_sha = self._client.script_load(GET_OR_SET_SCRIPT)
+            self._lpush_trim_sha = self._client.script_load(LPUSH_TRIM_SCRIPT)
+            self._hset_sha = self._client.script_load(HSET_SCRIPT)
+            self._hgetall_sha = self._client.script_load(HGETALL_SCRIPT)
+        except Exception as e:
+            logger.warning("Lua scripts not supported (likely using fakeredis): %s", e)
             self._get_or_set_sha = None
             self._lpush_trim_sha = None
             self._hset_sha = None
             self._hgetall_sha = None
-            self._register_scripts()
-        except Exception as exc:
-            logger.warning("Redis unavailable, using memory fallback cache: %s", exc)
-            self._client = None
-            self._fallback = {}
-
-    def _register_scripts(self):
-        """注册 Lua 脚本"""
-        if self._client is None:
-            return
-        self._get_or_set_sha = self._client.script_load(GET_OR_SET_SCRIPT)
-        self._lpush_trim_sha = self._client.script_load(LPUSH_TRIM_SCRIPT)
-        self._hset_sha = self._client.script_load(HSET_SCRIPT)
-        self._hgetall_sha = self._client.script_load(HGETALL_SCRIPT)
 
     def _key(self, name: str) -> str:
         """生成带前缀的键名"""
@@ -123,8 +171,6 @@ class RedisCache:
     
     def get(self, name: str, default: Any = None) -> Any:
         """获取缓存值"""
-        if self._client is None:
-            return self._fallback.get(self._key(name), default)
         try:
             val = self._client.get(self._key(name))
             if val is not None:
@@ -132,41 +178,33 @@ class RedisCache:
             return default
         except Exception as e:
             logger.error(f"Redis GET error for {name}: {e}")
-            return default
+            raise
     
     def set(self, name: str, value: Any, ttl: int = DEFAULT_TTL) -> bool:
         """设置缓存值"""
-        if self._client is None:
-            self._fallback[self._key(name)] = value
-            return True
         try:
             self._client.setex(self._key(name), ttl, json.dumps(value, default=str))
             return True
         except Exception as e:
             logger.error(f"Redis SET error for {name}: {e}")
-            return False
+            raise
     
     def delete(self, name: str) -> bool:
         """删除缓存"""
-        if self._client is None:
-            self._fallback.pop(self._key(name), None)
-            return True
         try:
             self._client.delete(self._key(name))
             return True
         except Exception as e:
             logger.error(f"Redis DELETE error for {name}: {e}")
-            return False
+            raise
     
     def exists(self, name: str) -> bool:
         """检查键是否存在"""
-        if self._client is None:
-            return self._key(name) in self._fallback
         try:
             return bool(self._client.exists(self._key(name)))
         except Exception as e:
             logger.error(f"Redis EXISTS error for {name}: {e}")
-            return False
+            raise
 
     # ==================== 原子获取或设置（防缓存击穿） ====================
     
@@ -174,85 +212,69 @@ class RedisCache:
         """
         原子获取或设置：如果键不存在，调用 default_factory 生成默认值并写入
         使用 Lua 脚本保证原子性，避免多进程同时重建缓存
+        如果 Lua 脚本不可用（如 fakeredis），退回到非原子操作
         """
-        if self._client is None:
-            key = self._key(name)
-            if key not in self._fallback:
-                self._fallback[key] = default_factory()
-            return self._fallback[key]
         try:
             default_val = default_factory()
             default_json = json.dumps(default_val, default=str)
-            result = self._client.evalsha(
-                self._get_or_set_sha, 1, self._key(name), default_json, ttl
-            )
-            return json.loads(result)
+            if self._get_or_set_sha is not None:
+                result = self._client.evalsha(
+                    self._get_or_set_sha, 1, self._key(name), default_json, ttl
+                )
+                return json.loads(result)
+            else:
+                # 回退：非原子操作（仅用于开发/测试环境）
+                val = self._client.get(self._key(name))
+                if val is not None:
+                    return json.loads(val)
+                self._client.setex(self._key(name), ttl, default_json)
+                return default_val
         except Exception as e:
             logger.error(f"Redis GET_OR_SET error for {name}: {e}")
-            return default_factory()
+            raise
 
     # ==================== 列表操作 ====================
     
     def lpush(self, name: str, value: Any, max_len: int = 1000) -> int:
         """原子左侧推入并修剪列表长度"""
-        if self._client is None:
-            key = self._key(name)
-            items = self._fallback.setdefault(key, [])
-            items.insert(0, value)
-            if len(items) > max_len:
-                del items[max_len:]
-            return len(items)
         try:
-            return self._client.evalsha(
-                self._lpush_trim_sha, 1, self._key(name),
-                json.dumps(value, default=str), max_len
-            )
+            if self._lpush_trim_sha is not None:
+                return self._client.evalsha(
+                    self._lpush_trim_sha, 1, self._key(name),
+                    json.dumps(value, default=str), max_len
+                )
+            else:
+                # 回退：非原子操作（仅用于开发/测试环境）
+                key = self._key(name)
+                self._client.lpush(key, json.dumps(value, default=str))
+                self._client.ltrim(key, 0, max_len - 1)
+                return self._client.llen(key)
         except Exception as e:
             logger.error(f"Redis LPUSH_TRIM error for {name}: {e}")
-            return 0
+            raise
     
     def lrange(self, name: str, start: int = 0, end: int = -1) -> List[Any]:
         """获取列表范围"""
-        if self._client is None:
-            items = self._fallback.get(self._key(name), [])
-            if not isinstance(items, list):
-                return []
-            if end < 0:
-                end = len(items) + end
-            return items[start:end + 1]
         try:
             vals = self._client.lrange(self._key(name), start, end)
             return [json.loads(v) for v in vals]
         except Exception as e:
             logger.error(f"Redis LRANGE error for {name}: {e}")
-            return []
+            raise
     
     def ltrim(self, name: str, start: int, end: int) -> bool:
         """修剪列表"""
-        if self._client is None:
-            items = self._fallback.get(self._key(name), [])
-            if isinstance(items, list):
-                self._fallback[self._key(name)] = items[start:end + 1]
-            return True
         try:
             self._client.ltrim(self._key(name), start, end)
             return True
         except Exception as e:
             logger.error(f"Redis LTRIM error for {name}: {e}")
-            return False
+            raise
     
     # ==================== 哈希操作（适合存储对象） ====================
     
     def hset(self, name: str, field: str, value: Any) -> bool:
         """设置哈希字段"""
-        if self._client is None:
-            key = self._key(name)
-            bucket = self._fallback.setdefault(key, {})
-            if not isinstance(bucket, dict):
-                bucket = {}
-            bucket[field] = value
-            self._fallback[key] = bucket
-            return True
         try:
             self._client.evalsha(
                 self._hset_sha, 1, self._key(name), field,
@@ -261,15 +283,10 @@ class RedisCache:
             return True
         except Exception as e:
             logger.error(f"Redis HSET error for {name}:{field}: {e}")
-            return False
+            raise
     
     def hget(self, name: str, field: str, default: Any = None) -> Any:
         """获取哈希字段"""
-        if self._client is None:
-            bucket = self._fallback.get(self._key(name), {})
-            if isinstance(bucket, dict):
-                return bucket.get(field, default)
-            return default
         try:
             val = self._client.hget(self._key(name), field)
             if val is not None:
@@ -277,50 +294,37 @@ class RedisCache:
             return default
         except Exception as e:
             logger.error(f"Redis HGET error for {name}:{field}: {e}")
-            return default
+            raise
     
     def hgetall(self, name: str) -> Dict[str, Any]:
         """获取哈希所有字段"""
-        if self._client is None:
-            return self._fallback.get(self._key(name), {})
         try:
             data = self._client.hgetall(self._key(name))
             return {k: json.loads(v) for k, v in data.items()}
         except Exception as e:
             logger.error(f"Redis HGETALL error for {name}: {e}")
-            return {}
+            raise
     
     def hdel(self, name: str, *fields: str) -> int:
         """删除哈希字段"""
-        if self._client is None:
-            bucket = self._fallback.get(self._key(name), {})
-            if isinstance(bucket, dict):
-                for field in fields:
-                    bucket.pop(field, None)
-                self._fallback[self._key(name)] = bucket
-            return 1
         try:
             return self._client.hdel(self._key(name), *fields)
         except Exception as e:
             logger.error(f"Redis HDEL error for {name}: {e}")
-            return 0
+            raise
     
     # ==================== 发布/订阅（用于跨进程通知） ====================
     
     def publish(self, channel: str, message: Any) -> int:
         """发布消息到频道"""
-        if self._client is None:
-            return 1
         try:
             return self._client.publish(f"{self.PREFIX}pubsub:{channel}", json.dumps(message, default=str))
         except Exception as e:
             logger.error(f"Redis PUBLISH error for {channel}: {e}")
-            return 0
+            raise
     
     def subscribe(self, channel: str):
         """订阅频道（返回 PubSub 对象，需在单独线程中监听）"""
-        if self._client is None:
-            return None
         pubsub = self._client.pubsub()
         pubsub.subscribe(f"{self.PREFIX}pubsub:{channel}")
         return pubsub
@@ -331,14 +335,14 @@ _cache_instance = None
 
 
 def get_cache() -> RedisCache:
-    """获取全局缓存实例"""
+    """获取全局缓存实例
+    
+    注意：Redis 必须可用，连接失败将抛出 ConnectionError。
+    不再提供内存 fallback（避免多容器间数据不一致）。
+    """
     global _cache_instance
     if _cache_instance is None:
-        try:
-            _cache_instance = RedisCache()
-        except Exception as exc:
-            logger.warning("Failed to initialize Redis cache, using memory fallback: %s", exc)
-            _cache_instance = MemoryCache()
+        _cache_instance = RedisCache()
     return _cache_instance
 
 
@@ -410,77 +414,3 @@ def get_data_cache_adapter() -> DataCacheAdapter:
     if _data_cache_adapter is None:
         _data_cache_adapter = DataCacheAdapter()
     return _data_cache_adapter
-
-
-class MemoryCache:
-    """Redis 不可用时的内存回退缓存。"""
-    def __init__(self):
-        self._data: Dict[str, Any] = {}
-
-    def _normalize_key(self, name: str) -> str:
-        return f"{RedisCache.PREFIX}{name}" if hasattr(RedisCache, 'PREFIX') else name
-
-    def get(self, name: str, default: Any = None) -> Any:
-        return self._data.get(self._normalize_key(name), default)
-
-    def set(self, name: str, value: Any, ttl: int = 3600) -> bool:
-        self._data[self._normalize_key(name)] = value
-        return True
-
-    def delete(self, name: str) -> bool:
-        self._data.pop(self._normalize_key(name), None)
-        return True
-
-    def exists(self, name: str) -> bool:
-        return self._normalize_key(name) in self._data
-
-    def get_or_set(self, name: str, default_factory, ttl: int = 3600) -> Any:
-        key = self._normalize_key(name)
-        if key not in self._data:
-            value = default_factory()
-            self._data[key] = value
-        return self._data[key]
-
-    def lpush(self, name: str, value: Any, max_len: int = 1000) -> int:
-        key = self._normalize_key(name)
-        items = self._data.setdefault(key, [])
-        if not isinstance(items, list):
-            items = [items]
-        items.insert(0, value)
-        if len(items) > max_len:
-            items = items[:max_len]
-        self._data[key] = items
-        return len(items)
-
-    def lrange(self, name: str, start: int = 0, end: int = -1) -> List[Any]:
-        key = self._normalize_key(name)
-        items = self._data.get(key, [])
-        if not isinstance(items, list):
-            return []
-        if end < 0:
-            end = len(items) + end
-        return items[start:end + 1]
-
-    def hset(self, name: str, field: str, value: Any) -> bool:
-        key = self._normalize_key(name)
-        bucket = self._data.setdefault(key, {})
-        if not isinstance(bucket, dict):
-            bucket = {}
-        bucket[field] = value
-        self._data[key] = bucket
-        return True
-
-    def hget(self, name: str, field: str, default: Any = None) -> Any:
-        bucket = self._data.get(self._normalize_key(name), {})
-        if isinstance(bucket, dict):
-            return bucket.get(field, default)
-        return default
-
-    def hgetall(self, name: str) -> Dict[str, Any]:
-        return self._data.get(self._normalize_key(name), {})
-
-    def publish(self, channel: str, message: Any) -> int:
-        return 1
-
-    def subscribe(self, channel: str):
-        return None

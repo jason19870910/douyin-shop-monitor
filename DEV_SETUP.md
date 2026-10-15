@@ -55,10 +55,10 @@ cp config/.env.example config/.env   # 如有
 docker compose up -d
 
 # 3. 前端部署（已构建推送）
+# 详细部署流程见：[README.md - 部署流程（前端）](./README.md#部署流程前端)
 # 修改前端代码后：
 cd src/frontend && npm run build
-scp -r build root@122.51.208.138:/tmp/frontend_build
-ssh root@122.51.208.138 "docker cp /tmp/frontend_build eb6af2f375fe:/usr/share/nginx/html && docker exec eb6af2f375fe nginx -s reload"
+# 然后按 README.md 中的步骤执行 docker cp + nginx reload
 ```
 
 ### 常见问题
@@ -76,3 +76,29 @@ ssh root@122.51.208.138 "docker cp /tmp/frontend_build eb6af2f375fe:/usr/share/n
 仓库已包含一个 GitHub Actions 工作流示例（`.github/workflows/ci.yml`），用于在 Python 3.11 下运行 lint 与测试。你可以根据团队需要调整。
 
 如需我为你生成其它 CI 平台或更严格的 lint 规则配置，告诉我即可。
+
+## 新增 API 端点
+
+后端现已提供以下额外接口：
+
+| 路径 | 说明 |
+|------|------|
+| /api/v1/version | 获取当前应用版本、git commit、构建时间和 API Key 内联状态 |
+| /api/v1/changes | 获取最近 10 条 git commit 变更记录 |
+| /api/v1/status | 检查 3 容器 (app/redis/frontend) 的健康状态 |
+| /api/v1/env | 获取 Vite 环境变量配置 (VITE_API_KEY, VITE_DEV_MODE 等) |
+
+使用示例：
+
+`ash
+# 查看版本信息
+curl -H 'X-API-Key: wlkj_douyin_api_20260921_abc123' http://122.51.208.138:3000/api/v1/version
+
+# 查看容器状态
+curl -H 'X-API-Key: wlkj_douyin_api_20260921_abc123' http://122.51.208.138:3000/api/v1/status
+`
+
+前端页面：
+- 访问 /dian/version 可查看版本控制管理页面（需在 Layout.tsx 中注册路由）
+
+> 注：上述端点均需要有效的 X-API-Key 认证头。

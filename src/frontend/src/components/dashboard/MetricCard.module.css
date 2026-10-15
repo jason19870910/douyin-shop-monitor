@@ -1,0 +1,87 @@
+@import '../../theme/variables.css';
+
+.card {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-5);
+  box-shadow: var(--shadow-card);
+  transition: all var(--transition-base);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+}
+
+.card:hover {
+  box-shadow: var(--shadow-card);
+  transform: translateY(-2px);
+  border-color: var(--accent-blue);
+  box-shadow: var(--glow-blue);
+}
+
+.header {
+  margin-bottom: var(--spacing-3);
+}
+
+.icon {
+  font-size: var(--font-size-lg);
+  opacity: 0.8;
+}
+
+.labelText {
+  margin: 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-secondary);
+}
+
+.valueWrapper {
+  margin-bottom: var(--spacing-3);
+}
+
+.value {
+  font-size: var(--font-size-4xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  line-height: var(--line-height-tight);
+  word-break: break-all;
+}
+
+.trend {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--border-color);
+}
+
+.trendUp {
+  color: var(--trend-up);
+}
+
+.trendDown {
+  color: var(--trend-down);
+}
+
+.trendFlat {
+  color: var(--text-muted);
+}
+
+.trendLabel {
+  color: var(--text-muted);
+  font-weight: var(--font-weight-normal);
+  font-size: var(--font-size-xs);
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+  .value {
+    font-size: var(--font-size-3xl);
+  }
+
+  .card {
+    padding: var(--spacing-4);
+  }
+}

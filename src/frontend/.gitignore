@@ -1,0 +1,15 @@
+# Node / frontend
+node_modules/
+npm-debug.log
+yarn-error.log
+build/
+dist/
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.log
+.DS_Store
+*.pem
+.vite/

@@ -1,0 +1,190 @@
+# ==================== Compliance Fetching ====================
+
+def fetch_and_check_compliance() -> Dict[str, Any]:
+    """Fetch products and run compliance checks against them using rule engine."""
+    logger.info("Running compliance checks on real products...")
+    
+    try:
+        products = cache.get(CACHE_KEYS['products'], [])
+        if not products:
+            logger.info("No products in cache, fetching from API...")
+            products = _fetch_products_from_api()
+            if products:
+                for product in products:
+                    product['fetched_at'] = datetime.now().isoformat()
+                cache.set(CACHE_KEYS['products'], products)
+                save_json_file(PRODUCTS_FILE, products)
+        
+        if not products:
+            logger.warning("No products available for compliance check")
+            return {
+                'status': 'success',
+                'message': 'No products to check',
+                'checked': 0,
+                'pass': 0,
+                'fail': 0,
+                'warning': 0,
+                'details': []
+            }
+        
+        rules = cache.get(CACHE_KEYS['compliance_rules'], [])
+        enabled_rules = [r for r in rules if r.get('enabled', True)]
+        
+        if not enabled_rules:
+            logger.warning("No enabled compliance rules found")
+            return {
+                'status': 'success',
+                'message': 'No enabled rules to check',
+                'checked': 0,
+                'pass': 0,
+                'fail': 0,
+                'warning': 0,
+                'details': []
+            }
+        
+        logger.info("Running compliance check on {} products with {} rules".format(len(products), len(enabled_rules)))
+        
+        from services.rule_engine import run_compliance_check, CheckResult
+        
+        all_results = []
+        total_checked = 0
+        total_pass = 0
+        total_fail = 0
+        total_warning = 0
+        
+        for product in products:
+            product_id = str(product.get('product_id') or product.get('id') or '')
+            product_name = product.get('product_name', 'Unknown Product')
+            
+            if not product_id:
+                logger.warning("Skipping product without ID: {}".format(product_name))
+                continue
+            
+            total_checked += 1
+            
+            outcomes = run_compliance_check(
+                target_data=product,
+                target_type='product',
+                target_id=product_id,
+                rules=enabled_rules
+            )
+            
+            product_results = {
+                'product_id': product_id,
+                'product_name': product_name,
+                'checked_at': datetime.now().isoformat(),
+                'rule_results': []
+            }
+            
+            product_pass = 0
+            product_fail = 0
+            product_warning = 0
+            
+            for outcome in outcomes:
+                if outcome.status == CheckResult.FAIL:
+                    product_fail += 1
+                elif outcome.status == CheckResult.WARNING:
+                    product_warning += 1
+                elif outcome.status == CheckResult.PASS:
+                    product_pass += 1
+                
+                log_entry = {
+                    'id': "log_" + str(int(datetime.now().timestamp())) + "_" + str(outcome.rule_id),
+                    'rule_id': outcome.rule_id,
+                    'rule_name': outcome.rule_name,
+                    'rule_type': outcome.rule_type.value if hasattr(outcome.rule_type, 'value') else str(outcome.rule_type),
+                    'target_type': 'product',
+                    'target_id': product_id,
+                    'target_name': product_name,
+                    'status': outcome.status.value if hasattr(outcome.status, 'value') else str(outcome.status),
+                    'details': outcome.details,
+                    'matched_content': outcome.matched_content,
+                    'checked_at': outcome.checked_at,
+                    'execution_time_ms': outcome.execution_time_ms
+                }
+                
+                product_results['rule_results'].append({
+                    'rule_id': outcome.rule_id,
+                    'rule_name': outcome.rule_name,
+                    'rule_type': outcome.rule_type.value if hasattr(outcome.rule_type, 'value') else str(outcome.rule_type),
+                    'status': outcome.status.value if hasattr(outcome.status, 'value') else str(outcome.status),
+                    'message': outcome.message,
+                    'details': outcome.details,
+                    'matched_content': outcome.matched_content,
+                    'execution_time_ms': outcome.execution_time_ms
+                })
+                
+                all_results.append(log_entry)
+            
+            if product_fail > 0:
+                product_results['overall_status'] = 'fail'
+                total_fail += 1
+            elif product_warning > 0:
+                product_results['overall_status'] = 'warning'
+                total_warning += 1
+            else:
+                product_results['overall_status'] = 'pass'
+                total_pass += 1
+            
+            _append_compliance_log(product_results)
+        
+        logger.info("Compliance check completed: checked={}, pass={}, fail={}, warning={}".format(total_checked, total_pass, total_fail, total_warning))
+        
+        return {
+            'status': 'success',
+            'message': "Checked {} products".format(total_checked),
+            'checked': total_checked,
+            'pass': total_pass,
+            'fail': total_fail,
+            'warning': total_warning,
+            'details': all_results
+        }
+        
+    except Exception as e:
+        logger.error("Compliance check failed: {}".format(e))
+        return {
+            'status': 'error',
+            'message': "Compliance check failed: {}".format(str(e)),
+            'checked': 0,
+            'pass': 0,
+            'fail': 0,
+            'warning': 0,
+            'details': []
+        }
+
+
+def _append_compliance_log(log_entry):
+    """Append a compliance check result to the logs cache and file."""
+    try:
+        existing_logs = cache.get(CACHE_KEYS['compliance_logs'], [])
+        if not isinstance(existing_logs, list):
+            existing_logs = []
+        
+        if 'rule_results' in log_entry:
+            for rule_result in log_entry['rule_results']:
+                entry = {
+                    'id': "log_" + str(int(datetime.now().timestamp())) + "_" + str(rule_result['rule_id']),
+                    'rule_id': rule_result['rule_id'],
+                    'rule_name': rule_result['rule_name'],
+                    'rule_type': rule_result['rule_type'],
+                    'target_type': 'product',
+                    'target_id': log_entry['product_id'],
+                    'target_name': log_entry['product_name'],
+                    'status': rule_result['status'],
+                    'details': rule_result['details'],
+                    'matched_content': rule_result.get('matched_content'),
+                    'checked_at': log_entry['checked_at'],
+                    'execution_time_ms': rule_result.get('execution_time_ms', 0)
+                }
+                existing_logs.insert(0, entry)
+        else:
+            existing_logs.insert(0, log_entry)
+        
+        if len(existing_logs) > 10000:
+            existing_logs = existing_logs[:10000]
+        
+        cache.set(CACHE_KEYS['compliance_logs'], existing_logs)
+        save_json_file(COMPLIANCE_FILE, existing_logs)
+        
+    except Exception as e:
+        logger.error("Failed to append compliance log: {}".format(e))

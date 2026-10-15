@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 @sync_bp.route('/sync', methods=['POST'])
+@sync_bp.route('/sync/manual', methods=['POST'])
 def manual_sync():
     """Trigger a full data synchronization job."""
     try:
@@ -35,15 +36,25 @@ def manual_sync():
                 logger.warning("Celery unavailable, falling back to sync mode: %s", e)
 
         results = scheduled_job()
+        # 关键：在 scheduled_job() 执行完后再读取 last_update，因为 scheduled_job 内部会更新它
         last_update = cache.get('last_update') or datetime.now().isoformat()
+        # 处理新的返回格式：{'status': overall_status, 'results': {...}, 'duration_ms': ...}
+        if isinstance(results, dict) and 'status' in results:
+            overall_status = results['status']
+            detail_results = results.get('results', {})
+        else:
+            overall_status = 'completed' if results else 'failed'
+            detail_results = results or {}
+        
         return success_response({
-            'status': 'completed',
+            'status': overall_status,
             'mode': 'sync',
             'last_update': last_update,
             'results': {
                 k: (v.get('status') if isinstance(v, dict) else str(v))
-                for k, v in (results or {}).items()
+                for k, v in (detail_results or {}).items()
             },
+            'duration_ms': results.get('duration_ms') if isinstance(results, dict) else None
         })
     except Exception as e:
         logger.exception("Manual sync failed")

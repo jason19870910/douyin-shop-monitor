@@ -70,3 +70,17 @@ def update_media(media_id: str):
     
     cache.set(CACHE_KEYS['media'], media_list)
     return success_response(media, 'Media updated')
+
+
+@media_bp.route('/media/<media_id>', methods=['DELETE'])
+def delete_media(media_id: str):
+    """Delete media entry."""
+    media_list = cache.get(CACHE_KEYS['media'], DEFAULT_MEDIA)
+    original_len = len(media_list)
+    media_list = [m for m in media_list if m.get('media_id') != media_id]
+    
+    if len(media_list) == original_len:
+        return not_found_response('Media')
+    
+    cache.set(CACHE_KEYS['media'], media_list)
+    return success_response(None, 'Media deleted')

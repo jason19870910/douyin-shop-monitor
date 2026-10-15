@@ -1,30 +1,39 @@
-version: "3.8"
-
 # Production override - uses pre-built images from registry
 # Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Updated for 3-container architecture: app (Flask + sync) + redis + frontend
 
 services:
-  monitor:
-    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-douyin}/monitor:latest
+  # 1. App: Flask API + Sync Scheduler (replaces monitor + celery_worker + celery_beat)
+  app:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-douyin}/app:latest
     build: null
     env_file:
       - ./config/.env
+    depends_on:
+      redis:
+        condition: service_healthy
 
-  celery_worker:
-    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-douyin}/monitor:latest
-    build: null
+  # 2. Redis: Shared data store (unchanged)
+  redis:
+    image: docker.1ms.run/redis:7-alpine
     env_file:
       - ./config/.env
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
-  celery_beat:
-    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-douyin}/monitor:latest
-    build: null
-    env_file:
-      - ./config/.env
-
+  # 3. Frontend: React + Nginx (unchanged)
   frontend:
     image: ${REGISTRY:-ghcr.io}/${IMAGE_NAME:-douyin}/frontend:latest
     build: null
+    depends_on:
+      - app
 
+  # 4. Nginx Reverse Proxy (production entry point)
   nginx:
     image: docker.1ms.run/nginx:alpine
+    env_file:
+      - ./config/.env

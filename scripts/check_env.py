@@ -10,9 +10,9 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
-ENV_EXAMPLE = PROJECT_ROOT / '.env.example'
-CONFIG_FILE = PROJECT_ROOT / 'config.py'
-APP_FILE = PROJECT_ROOT / 'app.py'
+ENV_EXAMPLE = PROJECT_ROOT / 'config' / '.env.example'
+CONFIG_FILE = PROJECT_ROOT / 'src' / 'backend' / 'app.py'
+APP_FILE = PROJECT_ROOT / 'src' / 'backend' / 'app.py'
 
 
 def parse_env_example(filepath: Path) -> dict:

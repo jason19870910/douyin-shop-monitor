@@ -10,9 +10,10 @@ import requests
 logger = logging.getLogger(__name__)
 
 # WeChat Work webhook URL (from env or config)
+# 使用用户提供的 Webhook URL: 08aa87f3-b150-4120-a0b7-f498309f223d
 WECHAT_WEBHOOK_URL = os.getenv(
-    'WECHAT_WEBHOOK_URL',
-    'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=4b6598f0-5864-49da-b185-f864c25241d6'
+    'WECHAT_WEBHOOK_URL', 
+    'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=08aa87f3-b150-4120-a0b7-f498309f223d'
 )
 
 # Email SMTP config (from env)

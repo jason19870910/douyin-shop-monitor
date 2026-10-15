@@ -3,13 +3,15 @@ import os
 import json
 import logging
 import logging.config
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from urllib.parse import parse_qs, urlparse
 
 import yaml
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -17,12 +19,24 @@ load_dotenv()
 
 from config import Config
 from services.fetcher import (
-    load_all_data,
-    save_all_data,
-    scheduled_job,
     cache,
     CACHE_KEYS,
+    fetch_and_store_products,
+    fetch_and_store_orders,
+    fetch_and_store_creators,
     fetch_and_store_creator_works,
+    fetch_and_store_videos,
+    check_alerts,
+    fetch_and_check_compliance,
+    _acquire_sync_lock,
+    _release_sync_lock,
+    _check_and_log_auth_errors,
+    _calculate_overall_status,
+    _extract_status,
+    _save_sync_history,
+    load_all_data,
+    save_all_data,
+    _init_default_compliance_rules,
 )
 from blueprints import (
     products_bp,
@@ -35,10 +49,11 @@ from blueprints import (
     media_bp,
     alerts_bp,
     dashboard_bp,
-    frontend_bp,
     sync_bp,
+    frontend_bp,
 )
 from utils.responses import unauthorized_response
+from middleware.health import health
 
 
 def setup_logging():
@@ -193,6 +208,7 @@ except ImportError:
 # Business data (dashboard, sync, mock status) requires Bearer API key.
 PUBLIC_ENDPOINTS = {
     '/api/v1/health',
+    '/api/v1/health/external',
     '/api/v1/auth/login',
     '/api/v1/auth/callback',
     '/api/v1/auth/qr-code',
@@ -255,8 +271,99 @@ app.register_blueprint(dashboard_bp)
 app.register_blueprint(sync_bp)
 app.register_blueprint(frontend_bp)
 
+@app.route('/api/v1/health', methods=['GET'])
+def health_check():
+    """Health check endpoint."""
+    return health()
+
 load_all_data()
-logger.info("Application started (Celery Beat handles scheduling)")
+_init_default_compliance_rules()
+logger.info("Application started with embedded sync scheduler")
+
+
+# ==================== Sync Scheduler ====================
+
+SYNC_INTERVAL_MINUTES = int(os.getenv('SCHEDULE_INTERVAL_MINUTES', '60'))
+
+
+def _run_sync_cycle():
+    """Run one complete data sync cycle with distributed lock."""
+    if not _acquire_sync_lock():
+        logger.warning("Sync skipped: another sync already in progress")
+        return
+    
+    try:
+        logger.info("Starting scheduled sync cycle...")
+        start_time = datetime.now()
+        
+        # Initialize default compliance rules if none exist
+        _init_default_compliance_rules()
+        
+        results = {}
+        results['products'] = fetch_and_store_products()
+        results['orders'] = fetch_and_store_orders()
+        results['creators'] = fetch_and_store_creators()
+        results['creator_works'] = fetch_and_store_creator_works()
+        results['videos'] = fetch_and_store_videos()
+        results['compliance'] = fetch_and_check_compliance()
+        results['alerts'] = check_alerts()
+        
+        # Check for auth errors and log (Way 2: log-only, most conservative)
+        _check_and_log_auth_errors(results)
+        
+        end_time = datetime.now()
+        duration_ms = int((end_time - start_time).total_seconds() * 1000)
+        
+        # Calculate overall status
+        overall_status = _calculate_overall_status(results)
+        
+        # Record sync history
+        _save_sync_history({
+            'timestamp': end_time.isoformat(),
+            'duration_ms': duration_ms,
+            'status': overall_status,
+            'trigger': 'scheduled',
+            'details': {
+                'products': _extract_status(results.get('products')),
+                'orders': _extract_status(results.get('orders')),
+                'creators': _extract_status(results.get('creators')),
+                'creator_works': _extract_status(results.get('creator_works')),
+                'compliance': _extract_status(results.get('compliance')),
+                'alerts': _extract_status(results.get('alerts')),
+            },
+        })
+        
+        logger.info("Sync cycle completed in %dms with status: %s", duration_ms, overall_status)
+    except Exception as e:
+        logger.error("Sync cycle failed: %s", e, exc_info=True)
+    finally:
+        _release_sync_lock()
+
+
+def _sync_scheduler_loop():
+    """Background thread that runs scheduled sync tasks."""
+    import schedule
+    
+    # Schedule sync every SYNC_INTERVAL_MINUTES minutes
+    schedule.every(SYNC_INTERVAL_MINUTES).minutes.do(_run_sync_cycle)
+    
+    # Also run immediately on startup
+    _run_sync_cycle()
+    
+    # Keep the thread running
+    logger.info("Sync scheduler started, interval: %d minutes", SYNC_INTERVAL_MINUTES)
+    while True:
+        try:
+            schedule.run_pending()
+            time.sleep(30)
+        except Exception as e:
+            logger.warning("Scheduler error: %s", e)
+            time.sleep(5)
+
+
+# Start the scheduler thread daemon
+scheduler_thread = threading.Thread(target=_sync_scheduler_loop, daemon=True)
+scheduler_thread.start()
 
 
 def create_app() -> Flask:

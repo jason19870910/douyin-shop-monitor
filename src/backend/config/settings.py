@@ -159,7 +159,7 @@ class Settings(BaseSettings):
     # =========================================================================
     # 日志配置
     # =========================================================================
-    LOG_LEVEL: str = Field(default='INFO', description='日志级别')
+    LOG_LEVEL: str = Field(default='DEBUG', description='日志级别')
     LOG_FILE: str = Field(default='logs/app.log', description='日志文件路径')
     LOG_MAX_BYTES: int = Field(default=10485760, description='单个日志文件最大字节数 (10MB)')
     LOG_BACKUP_COUNT: int = Field(default=5, description='日志备份文件数量')

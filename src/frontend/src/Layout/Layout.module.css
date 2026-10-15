@@ -1,0 +1,368 @@
+.layout {
+  min-height: 100vh;
+  background: var(--color-bg-primary);
+}
+
+.sider {
+  height: 100vh;
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: var(--z-sider);
+  box-shadow: var(--shadow-sider);
+  background: var(--color-sider-bg);
+  overflow-y: auto;
+  transition: width var(--transition-base), margin var(--transition-base);
+}
+
+.siderContent {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.siderHeader {
+  padding: var(--spacing-4) var(--spacing-5);
+  border-bottom: 1px solid var(--color-sider-border);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  margin-bottom: var(--spacing-4);
+  width: 100%;
+}
+
+.logoIcon {
+  font-size: 24px;
+  color: var(--color-sider-text-primary);
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--color-sider-logo-bg);
+}
+
+.logoText {
+  color: var(--color-sider-text-primary);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.collapseBtn {
+  width: 100%;
+  color: var(--color-sider-text-secondary);
+  border: 1px solid var(--color-sider-collapse-btn-border);
+  background: transparent;
+  padding: var(--spacing-2);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.collapseBtn:hover {
+  color: var(--color-sider-text-primary);
+  border-color: var(--color-primary-500);
+  background: var(--color-sider-selected-hover);
+}
+
+.menu {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: var(--spacing-2) 0;
+}
+
+.menu .ant-menu-item {
+  border-radius: var(--radius-md);
+  margin: var(--spacing-1) 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  transition: background var(--transition-fast);
+}
+
+.menu .ant-menu-item:hover {
+  background: var(--color-sider-hover);
+}
+
+.menu .ant-menu-item-selected {
+  background: var(--color-primary-500) !important;
+  border-radius: var(--radius-md) var(--radius-md) var(--radius-md) var(--radius-md) !important;
+}
+
+.menu .ant-menu-item-selected .ant-menu-title-content {
+  color: var(--color-text-inverted);
+  font-weight: var(--font-weight-medium);
+}
+
+.menu .ant-menu-item-icon {
+  color: var(--color-sider-text-secondary);
+  font-size: var(--font-size-base);
+  margin-right: var(--spacing-2);
+  display: flex;
+  align-items: center;
+}
+
+.menu .ant-menu-item-selected .ant-menu-item-icon {
+  color: var(--color-text-inverted);
+}
+
+.siderFooter {
+  padding: var(--spacing-4);
+  border-top: 1px solid var(--color-sider-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin-top: auto;
+}
+
+.syncArea {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  width: 100%;
+}
+
+.lastUpdate {
+  color: var(--color-sider-text-muted);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80px;
+}
+
+.syncBtn {
+  width: 100%;
+  height: 32px;
+  font-size: var(--font-size-sm);
+}
+
+.userArea {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.mainLayout {
+  margin-left: var(--layout-sider-width);
+  transition: margin-left var(--transition-base);
+  min-height: 100vh;
+}
+
+.mainLayout.sider-collapsed {
+  margin-left: var(--layout-sider-collapsed-width);
+}
+
+.mainLayout.sider-collapsed .siderHeader {
+  justify-content: center;
+}
+
+.mainLayout.sider-collapsed .siderHeader .logoText {
+  display: none;
+}
+
+.mainLayout.sider-collapsed .siderHeader .collapseBtn {
+  order: -1;
+}
+
+.content {
+  padding: var(--layout-content-padding);
+  background: var(--color-bg-primary);
+  min-height: 100vh;
+  transition: margin-left var(--transition-base);
+}
+
+/* ========== 折叠状态专用样式 ========== */
+
+.sider.collapsed {
+  width: var(--layout-sider-collapsed-width, 80px) !important;
+}
+
+.sider.collapsed .logoText:not(:hover) {
+  display: none;
+}
+
+.sider.collapsed .menu .ant-menu-item {
+  justify-content: center;
+  padding: var(--spacing-1) 0;
+}
+
+.sider.collapsed .menu .ant-menu-item .ant-menu-item-icon {
+  margin: 0 auto;
+}
+
+.sider.collapsed .menu .ant-menu-item .ant-menu-title-content {
+  display: none;
+}
+
+.sider.collapsed .menu .ant-menu-item:hover {
+  background: var(--color-sider-hover);
+}
+
+.sider.collapsed .menu .ant-menu-item:hover .ant-menu-title-content {
+  display: block;
+  position: absolute;
+  left: 100%;
+  margin-left: 10px;
+  background: var(--color-sider-hover);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-md);
+  white-space: nowrap;
+  z-index: 1000;
+}
+
+.sider.collapsed .siderFooter .syncArea {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sider.collapsed .siderFooter .lastUpdate {
+  display: none;
+}
+
+.sider.collapsed .siderFooter .syncBtn {
+  width: auto;
+  flex: 1;
+}
+
+.sider.collapsed .siderFooter .userArea {
+  flex-direction: row;
+  margin-left: var(--spacing-2);
+}
+
+/* ========== 响应式优化 ========== */
+
+@media (max-width: 991px) {
+  .sider {
+    z-index: var(--z-sider-responsive);
+  }
+
+  .mainLayout {
+    margin-left: 0;
+    background: var(--bg-page);
+    z-index: var(--z-content);
+  }
+
+  .mainLayout.sider-collapsed {
+    margin-left: 0;
+  }
+
+  .ant-layout-sider-collapsed .logoText {
+    display: none;
+  }
+
+  .ant-layout-sider-collapsed .collapseBtn {
+    justify-content: center;
+  }
+
+  .ant-layout-sider-collapsed .lastUpdate {
+    display: none;
+  }
+
+  .ant-layout-sider-collapsed .syncBtn span {
+    display: none;
+  }
+}
+
+/* ========== 高亮当前路径 ========== */
+
+.menu .ant-menu-item.path-hightlight {
+  position: relative;
+}
+
+.menu .ant-menu-item.path-hightlight::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--color-primary-500);
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+
+.loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 200px;
+  font-size: var(--font-size-base);
+  color: var(--color-neutral-400);
+}
+
+/* ========== z-index 堆叠上下文管理 ========== */
+/* 基础 z-index 等级：100-900 用于常规布局 */
+:root {
+  --z-header: 100;      /* 头部 */
+  --z-sider: 900;       /* 侧边栏 (基础) */
+  --z-sider-responsive: 1200; /* 侧边栏 (响应式 < 991px) */
+  --z-content: 800;     /* 内容区 */
+  --z-drawer: 1300;     /* 抽屉/弹窗 (最高优先级) */
+  --z-dropdown: 1250;   /* 下拉菜单 */
+}
+
+/* 响应式断点 lg (992px) */
+@media (max-width: 991px) {
+  .sider {
+    z-index: var(--z-sider-responsive); /* 响应式提升 z-index */
+  }
+
+  .mainLayout {
+    margin-left: 0;
+    /* 增加背景色防止内容区域露出 */
+    background: var(--bg-page); 
+    z-index: var(--z-content); /* 内容区在响应式模式下的 z-index */
+  }
+
+  .mainLayout.sider-collapsed {
+    margin-left: 0;
+  }
+  
+  /* 确保内容区在响应式模式下仍上层 */
+  .ant-layout-content {
+    z-index: var(--z-content);
+  }
+}
+
+/* 折叠状态下的调整 */
+.ant-layout-sider-collapsed .logoText {
+  display: none;
+}
+
+.ant-layout-sider-collapsed .collapseBtn {
+  justify-content: center;
+}
+
+.ant-layout-sider-collapsed .lastUpdate {
+  display: none;
+}
+
+.ant-layout-sider-collapsed .syncBtn span {
+  display: none;
+}
+
+/* 菜单折叠时的图标居中 */
+.ant-layout-sider-collapsed .ant-menu-inline .ant-menu-submenu-title,
+.ant-layout-sider-collapsed .ant-menu-inline .ant-menu-item {
+  display: flex;
+  justify-content: center;
+  padding: var(--spacing-2);
+}
+
+.ant-layout-sider-collapsed .ant-menu-inline .ant-menu-item::after {
+  display: none;
+}

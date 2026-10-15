@@ -1,0 +1,17 @@
+@import '@/styles/common.module.css';
+
+.tabs {
+  margin-bottom: var(--spacing-4);
+}
+
+.tabs :global(.ant-tabs-nav) {
+  margin-bottom: 0;
+}
+
+.tabs :global(.ant-tabs-tab) {
+  padding: var(--spacing-2) var(--spacing-4);
+}
+
+.tabs :global(.ant-tabs-tab-active) {
+  font-weight: 600;
+}

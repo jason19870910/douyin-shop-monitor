@@ -1,0 +1,87 @@
+.authCard {
+  margin-top: var(--spacing-6);
+}
+
+.authStatus {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-4);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--spacing-6);
+}
+
+.statusIndicator {
+  padding: var(--spacing-2) var(--spacing-4);
+  border-radius: var(--radius-md);
+  font-weight: var(--font-weight-medium);
+}
+
+.statusIndicator.authorized {
+  background: var(--color-success-50);
+  color: var(--color-success-600);
+  border: 1px solid var(--color-success-200);
+}
+
+.statusIndicator.unauthorized {
+  background: var(--color-error-50);
+  color: var(--color-error-500);
+  border: 1px solid var(--color-error-200);
+}
+
+.statusIndicator.checking {
+  background: var(--color-primary-50);
+  color: var(--color-primary-600);
+  border: 1px solid var(--color-primary-200);
+}
+
+.statusIndicator.error {
+  background: var(--color-error-50);
+  color: var(--color-error-500);
+  border: 1px solid var(--color-error-200);
+}
+
+.statusActions {
+  display: flex;
+  gap: var(--spacing-3);
+}
+
+.authInfo {
+  padding: var(--spacing-4);
+}
+
+.authInfo p {
+  margin: var(--spacing-2) 0;
+  color: var(--color-text-secondary);
+}
+
+.noInfo {
+  color: var(--color-text-quaternary);
+  text-align: center;
+  padding: var(--spacing-6);
+}
+
+.qrSection {
+  text-align: center;
+  padding: var(--spacing-6);
+}
+
+.qrCode {
+  max-width: 200px;
+  margin: var(--spacing-4) auto;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
+}
+
+.qrPlaceholder {
+  padding: var(--spacing-10);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-quaternary);
+}
+
+.qrTip {
+  color: var(--color-text-tertiary);
+  margin-top: var(--spacing-3);
+}

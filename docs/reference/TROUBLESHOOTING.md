@@ -2,7 +2,7 @@
 title: 故障排查指南
 version: 1.0.0
 status: Published
-last_updated: 2026-09-26
+last_updated: 2026-10-15
 owner: DevOps Lead
 reviewers: [Tech Lead, 运维工程师, Backend Lead]
 approvers: [Tech Lead]
@@ -105,6 +105,69 @@ changelog: |
 │   └── window.__ENV__ / Vite define 配置
 └── 清理缓存重试
     └── Ctrl+Shift+R / 无痕模式 / CDN 刷新
+```
+
+### 2.5 价格/金额显示异常 (新增 2026-10-15)
+```
+现象: 商品价格显示 100 倍 (如 ¥825 应为 ¥8.25)、订单金额为 0 或字段缺失
+├── 检查 API 返回单位
+│   └── /products、/dashboard/stats.top_products 返回 price_lower/price_higher/market_price → 单位为 **分 (fen)**
+│   └── /orders、/dashboard/stats.recent_orders、/orders/stats 返回 pay_amount/total_price → 单位为 **元 (yuan)**
+├── 检查前端 formatCurrency 调用
+│   └── 商品价格类字段：render 中需 `(value / 100)` 后传入 formatCurrency
+│   └── 订单金额类字段：直接传入 formatCurrency (已是元)
+├── 检查字段名映射
+│   └── 订单列表：API 返回 pay_amount/total_price，前端需用正确字段名
+│   └── 热销商品：API 返回 price_lower/price_higher，前端需用 price_lower
+├── 检查导出 CSV
+│   └── exportConfig.columns 中添加 render 函数做单位转换
+└── 验证修复
+    └── 访问 /#/dian/products、/#/dashboard、/#/orders、/#/ 确认价格/金额显示正确
+```
+
+### 2.6 首页 KPI 数据全为 0 / 趋势图空白 (新增 2026-10-15)
+```
+现象: 首页 今日销售额 0、今日订单数 0、商品概览在售 0、销售趋势/热销商品显示占位提示
+├── 检查后端统计端点数据源
+│   └── /products/stats、/orders/stats、/creators/overview 是否读取本地缓存聚合
+│   └── 修复前：直接调用外部 FXG API 返回空/受限
+│   └── 修复后：读取 Redis/文件缓存的同步数据本地统计
+├── 检查前端 Hook 调用
+│   └── Home.tsx: useProductsStats、useOrdersStats、useCreatorsOverview (KPI 用)
+│   └── Home.tsx: useDashboardStats (趋势/TOP 数据用)
+├── 检查同步任务状态
+│   └── 定时任务是否成功写入缓存 (Redis/文件)
+│   └── 手动触发同步验证: 点击首页"手动同步"按钮
+└── 验证修复
+    └── 首页 KPI 卡片显示真实数据
+    └── 销售趋势图表显示 7 天折线
+    └── 热销商品 TOP 5 表格显示数据
+```
+
+### 2.7 好货商品预览 API 失败/无数据 (新增 2026-10-15)
+```
+现象: /api/v1/external/haohuo/product/preview 返回错误、status_code != 0、detail_info 为空
+├── 检查 HAOHUO_COOKIES 环境变量
+│   └── 服务器 .env 或 docker-compose.yml 是否配置有效的 HAOHUO_COOKIES
+│   └── Cookie 有效期通常 2h-7 天，需定期通过浏览器 F12 更新
+├── 检查请求参数
+│   └── POST body 必须包含 promotion_id (商品ID)
+│   └── Query params: is_h5=1, origin_type=doudian_product_management
+├── 检查动态签名参数
+│   └── msToken、a_bogus 为时效性参数，当前实现不传递
+│   └── 服务端可能仅依靠 Cookie 校验，若失败需从页面 JS 计算或 Cookie 提取
+├── 检查网络/防火墙
+│   └── 服务器是否能访问 haohuo.jinritemai.com (端口 443)
+│   └── curl -v "https://haohuo.jinritemai.com/aweme/v2/shop/promotion/pack/detail/" 测试
+├── 检查后端日志
+│   └── docker-compose logs backend -f | grep haohuo
+│   └── 查看 status_code: -1=连接错误, -2=超时, -3=请求失败, -99=未知异常
+└── 验证修复
+    └── 返回 status_code: 0
+    └── detail_info.detail_imgs 数组非空 (商品详情图片)
+    └── detail_info.product_format 非空 (商品规格)
+    └── detail_info.detail_config 非空 (价格/销量/协议说明)
+    └── detail_info.jump_url 非空 (直播间/lynxview 跳转链接)
 ```
 
 ### 2.5 权限/认证异常

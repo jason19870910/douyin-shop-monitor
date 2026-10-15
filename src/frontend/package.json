@@ -5,6 +5,8 @@
   "type": "module",
   "dependencies": {
     "@ant-design/icons": "^5.2.0",
+    "@tanstack/react-query": "^5.0.0",
+    "@tanstack/react-query-devtools": "^5.0.0",
     "antd": "^5.12.0",
     "axios": "^1.6.0",
     "dayjs": "^1.11.10",
@@ -17,7 +19,7 @@
   "scripts": {
     "dev": "vite",
     "start": "vite",
-    "build": "vite build",
+    "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx",
     "lint:fix": "eslint src --ext ts,tsx --fix",
@@ -29,7 +31,8 @@
     "test:ui": "vitest --ui",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
-    "prepare": "husky install"
+    "prepare": "husky install",
+    "typecheck": "tsc --noEmit"
   },
   "eslintConfig": {
     "extends": [
@@ -91,5 +94,3 @@
     "vitest": "^2.1.9"
   }
 }
-
-

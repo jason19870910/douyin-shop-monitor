@@ -59,15 +59,106 @@ def get_orders():
 
 @orders_bp.route('/orders/stats', methods=['GET'])
 def get_external_order_stats():
-    """转发订单统计请求到外部 API，使用 fxg 基础 URL、统一 Header 与 Cookie。"""
-    params = request.args.to_dict(flat=True)
-    endpoint = f"{Config.FXG_BASE_URL}/api/order/tabcnt"
-    headers = Config.COMMON_HEADERS.copy()
-    cookies = {}
-    if Config.FXG_COOKIES:
-        for pair in Config.FXG_COOKIES.split(';'):
-            if '=' in pair:
-                k, v = pair.strip().split('=', 1)
-                cookies[k] = v
-    result = _request(endpoint, params=params, headers=headers, cookies=cookies)
-    return success_response(result.get('data', {}), 'Order stats fetched from external service')
+    """Get order statistics from local cache (synced data).
+    
+    Returns standardized format matching frontend OrderStatsData:
+    {
+      "all": {"count": int, "amount": int},
+      "pay": {"count": int, "amount": int},
+      "cancel": {"count": int, "amount": int},
+      "sub_tab_count_map": {...}
+    }
+    """
+    try:
+        # 从本地缓存获取已同步的订单数据
+        cached = cache.get(CACHE_KEYS['orders'])
+        if not cached:
+            # 缓存为空，尝试从文件加载
+            from services.fetcher import ORDERS_FILE
+            import json
+            if ORDERS_FILE.exists():
+                with open(ORDERS_FILE, 'r', encoding='utf-8') as f:
+                    cached = json.load(f)
+        
+        if not cached:
+            # 仍为空，返回零值
+            return success_response({
+                'all': {'count': 0, 'amount': 0},
+                'pay': {'count': 0, 'amount': 0},
+                'cancel': {'count': 0, 'amount': 0},
+                'sub_tab_count_map': {}
+            }, 'No order data available')
+        
+        # 处理缓存格式：可能是列表或包含 items 键的字典
+        if isinstance(cached, dict):
+            orders = cached.get('items', [])
+        else:
+            orders = cached
+        
+        if not isinstance(orders, list):
+            orders = []
+        
+        # 统计各状态订单数量和金额
+        all_count = len(orders)
+        all_amount = 0
+        pay_count = 0
+        pay_amount = 0
+        cancel_count = 0
+        cancel_amount = 0
+        sub_tab_count_map = {}
+        
+        for o in orders:
+            # 累计总金额 (外部 API 返回分，需除以 100 转为元)
+            try:
+                amt_raw = float(o.get('amount', o.get('order_amount', o.get('pay_amount', 0))))
+                all_amount += amt_raw / 100
+            except (ValueError, TypeError):
+                pass
+            
+            # 判断订单状态
+            status = str(o.get('status', '')).lower()
+            
+            # 状态归一化映射
+            if status in ('all', '全部', ''):
+                # all 状态不单独计数，已包含在 all_count 中
+                pass
+            elif status in ('pay', 'paid', '支付', '已支付', '完成', 'done', 'finished'):
+                pay_count += 1
+                try:
+                    pay_amount += float(o.get('amount', o.get('order_amount', o.get('pay_amount', 0)))) / 100
+                except (ValueError, TypeError):
+                    pass
+            elif status in ('cancel', 'cancelled', '取消', '已取消', '退款', 'refund'):
+                cancel_count += 1
+                try:
+                    cancel_amount += float(o.get('amount', o.get('order_amount', o.get('pay_amount', 0)))) / 100
+                except (ValueError, TypeError):
+                    pass
+            else:
+                # 其他状态归入 sub_tab_count_map
+                tab_key = status or 'unknown'
+                if tab_key not in sub_tab_count_map:
+                    sub_tab_count_map[tab_key] = {'count': 0, 'amount': 0}
+                sub_tab_count_map[tab_key]['count'] += 1
+                try:
+                    sub_tab_count_map[tab_key]['amount'] += float(o.get('amount', o.get('order_amount', o.get('pay_amount', 0)))) / 100
+                except (ValueError, TypeError):
+                    pass
+        
+        normalized = {
+            'all': {'count': all_count, 'amount': all_amount},
+            'pay': {'count': pay_count, 'amount': pay_amount},
+            'cancel': {'count': cancel_count, 'amount': cancel_amount},
+            'sub_tab_count_map': sub_tab_count_map
+        }
+        
+        return success_response(normalized, 'Order stats fetched from local cache')
+    except Exception as e:
+        from flask import current_app
+        current_app.logger.error("Failed to fetch order stats from cache: %s", e)
+        return success_response({
+            'all': {'count': 0, 'amount': 0},
+            'pay': {'count': 0, 'amount': 0},
+            'cancel': {'count': 0, 'amount': 0},
+            'sub_tab_count_map': {}
+        }, 'Failed to fetch order stats', 502)
