@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <script>window.process=window.process||{env:{}};</script>
+
+    <meta charset="UTF-8" />
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <!--
+        分享页独立 HTML 入口（与 index.html 并行）。
+        - 命中路径：/(agents|app|workbuddy)/share/* 与 /(agents|app|workbuddy)/tasks/share/*
+        - 由 nginx try_files 把上述路径 fallback 到本文件
+        - 入口 JS：/src/share-main.tsx（不挂 AgentWebApp / web-agent-providers，
+          也不挂 sidebar / setting 子树），分享访客只下载分享页所需的最小依赖。
+
+        关键约束（与 index.html 保持一致的部分）：
+        1. document.title 由 React 端 usePreviewDocumentTitle 接管，HTML 留空避免视觉跳变
+        2. __toCdnUrl / prod / __IS_INTERNATIONAL_EDITION__ / {"billing":"true"} /
+           zh-CN / 邀请你加入协作 / 点击查看团队共享的内容 · WorkBuddy 项目 占位符必须保留，由 ci/html.sh 在容器启动时 sed 替换
+        3. Open Graph / Twitter Card meta 必须直接写在静态 HTML 里 ——
+           微信 / 企微 / Slack 的爬虫不执行 JS，只读初始 HTML
+           （zh-CN / 邀请你加入协作 / 点击查看团队共享的内容 · WorkBuddy 项目 / 邀请你加入协作 / 点击查看团队共享的内容 · WorkBuddy 项目 按部署版
+           本 IS_INTERNATIONAL_EDITION 环境变量切换中/英文，避免海外好友收到中文邀请卡片）
+        4. 不打骨架屏（与 index.html 不同）：分享页是从外部链接进入、首屏只是中央 loading，
+           没有侧栏/欢迎页结构需要预占位，加骨架屏反而拖慢 FCP
+
+        与 index.html 的差异（删除项）：
+        - 整段 skeleton CSS / DOM
+        - fetch /console/accounts 探测登录态
+        - __shouldShowSkeleton / __isLoggedIn / __skeletonTheme 全局变量
+        - SHARE_PATH_PREFIXES 路径分流逻辑（分享页本身就是命中 share.html，无需再判断）
+    -->
+    <title></title>
+    <link rel="icon" href="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/workbuddy.svg" />
+
+    <!-- 社交平台分享卡片 meta（与 index.html 保持同步：每次改一边记得改另一边）。-->
+    <!-- 中文/英文文案由 ci/html.sh 按 IS_INTERNATIONAL_EDITION 环境变量切换。 -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="WorkBuddy" />
+    <meta property="og:title" content="邀请你加入协作" />
+    <meta property="og:description" content="点击查看团队共享的内容 · WorkBuddy 项目" />
+    <meta property="og:image"
+        content="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/share-logo.png?v=2" />
+    <meta property="og:image:secure_url"
+        content="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/share-logo.png?v=2" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="560" />
+    <meta property="og:image:height" content="560" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="邀请你加入协作" />
+    <meta name="twitter:description" content="点击查看团队共享的内容 · WorkBuddy 项目" />
+    <meta name="twitter:image"
+        content="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/share-logo.png?v=2" />
+
+    <script>
+        window.RUN_ENV = 'prod';
+        window.IS_INTERNATIONAL_EDITION = '__IS_INTERNATIONAL_EDITION__';
+        window.PRODUCT_FEATURES = '{"billing":"true"}';
+        window.__toCdnUrl = (url) => {
+            const BASE_URL = '//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b';
+            return (/__.*?__$/.test(BASE_URL) ? '' : BASE_URL) + '/' + url;
+        };
+
+        // 分享落地页强制使用 WorkBuddy favicon，避免与页面内绿色 logo 不一致。
+        // 主路径按现有 href 替换文件名（保留 querystring 与 CDN 前缀）；
+        // 兜底分支基于 currentHref 派生目录前缀，避免未来 favicon 改成 .ico 等
+        // 格式时塌缩成同域裸路径 /assets/workbuddy.svg（CDN 模式下会丢前缀）。
+        try {
+          var iconLink = document.querySelector('link[rel="icon"]');
+          var currentHref = iconLink && iconLink.getAttribute('href');
+          var FAVICON_PATTERN = /[^/]+\.svg(\?.*)?$/;
+          if (iconLink && currentHref && FAVICON_PATTERN.test(currentHref)) {
+            iconLink.setAttribute(
+              'href',
+              currentHref.replace(FAVICON_PATTERN, 'workbuddy.svg$1'),
+            );
+          } else if (iconLink && currentHref) {
+            // 派生 currentHref 的目录前缀（去掉末尾文件名 + 可选 querystring），
+            // 拼上 workbuddy.svg。这样 CDN 前缀、子路径都能保留。
+            var dirPrefix = currentHref.replace(/[^/]+(\?.*)?$/, '');
+            iconLink.setAttribute('href', dirPrefix + 'workbuddy.svg');
+          }
+        } catch (e) {
+          // favicon 切换失败不影响主流程
+        }
+    </script>
+
+    <!--
+        极简 loading 样式：在 React 接管前给个中央 spinner，避免大段白屏。
+        分享页主题跟随系统配色（prefers-color-scheme），不读 localStorage（首屏越简单越快）。
+    -->
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #ffffff;
+            color: #1a1a1a;
+        }
+        @media (prefers-color-scheme: dark) {
+            html, body {
+                background: #181818;
+                color: #e6e6e6;
+            }
+        }
+        #root {
+            width: 100%;
+            min-height: 100vh;
+            min-height: 100dvh;
+        }
+        .share-bootstrap-loading {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+        .share-bootstrap-loading .spinner {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            border: 2px solid currentColor;
+            border-top-color: transparent;
+            opacity: 0.5;
+            animation: share-spin 0.8s linear infinite;
+        }
+        @keyframes share-spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/modulepreload-polyfill-B5Qt9EMX.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/vendor-react-CddgMY8S.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/entry-shared-BJVvVSsB.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/vite-preload-helper-PPVm8Dsz.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/vendor-dompurify-DdwdxIb1.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/vendor-ui-shared-DW3xks7c.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/vendor-katex-DXmhg9VW.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/vendor-hljs-BWj983kd.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/vendor-markdown-DTlZDvlY.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/vendor-parsers-D9iiloVJ.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/vendor-lodash-CT_0phA3.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/genie-chat-ui-DZJReibq.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/vendor-qrcode-BSRzK8oC.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/vendor-zustand-QomKndtS.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/shared-wb-components-C42OiRcd.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/shared-account-http-DxLjwaEs.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/shared-i18n-BcPxtL6M.js"></script>
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/genie-monitor-CUHd95Rd.js"></script>
+  
+  
+  
+  <script type="module" crossorigin src="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/share-BTK2VkMs.js"></script>
+  <link rel="stylesheet" crossorigin href="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/vendor-katex-DLVrwanO.css">
+  <link rel="stylesheet" crossorigin href="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/genie-chat-ui-CkIJB5Qo.css">
+  <link rel="stylesheet" crossorigin href="//static.workbuddy.cn/web/agents/a5686c116b670834ac96838883ebaa7ab6fd228b/assets/shared-wb-components-D8OzhW2r.css">
+  
+  
+  
+</head>
+
+<body>
+    <div id="root">
+        <!-- React 接管前的占位 spinner，挂载后会被 createRoot 清空 -->
+        <div class="share-bootstrap-loading">
+            <div class="spinner"></div>
+        </div>
+    </div>
+</body>
+
+</html>

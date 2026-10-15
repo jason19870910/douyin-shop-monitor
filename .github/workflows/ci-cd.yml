@@ -1,0 +1,235 @@
+name: CI/CD - Build & Deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']  # 语义化版本标签触发
+  workflow_dispatch:  # 手动触发
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+  DEPLOY_PATH: /opt/douyin-platform
+
+jobs:
+  # ==================== 1. 生成版本信息 ====================
+  version:
+    name: Generate Version Info
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.gen.outputs.version }}
+      commit: ${{ steps.gen.outputs.commit }}
+      built_at: ${{ steps.gen.outputs.built_at }}
+      is_release: ${{ steps.gen.outputs.is_release }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史用于生成 changes
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate version info
+        id: gen
+        run: |
+          python scripts/generate_version_info.py
+          VERSION=$(cat src/backend/data/version_info.json | jq -r .version)
+          COMMIT=$(cat src/backend/data/version_info.json | jq -r .commit)
+          BUILT_AT=$(cat src/backend/data/version_info.json | jq -r .builtAt)
+          
+          # 如果是 tag 触发，优先使用 tag 作为版本号
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG_VERSION=${GITHUB_REF#refs/tags/v}
+            echo "version=$TAG_VERSION" >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+          echo "commit=$COMMIT" >> $GITHUB_OUTPUT
+          echo "built_at=$BUILT_AT" >> $GITHUB_OUTPUT
+
+      - name: Upload version files as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-files
+          path: |
+            src/backend/data/version_info.json
+            src/backend/data/changes_info.json
+
+  # ==================== 2. 构建后端镜像 ====================
+  build-backend:
+    name: Build Backend Image
+    runs-on: ubuntu-latest
+    needs: version
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download version files
+        uses: actions/download-artifact@v4
+        with:
+          name: version-files
+          path: src/backend/data/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Backend
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=
+            type=raw,value=${{ needs.version.outputs.version }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./src/backend
+          file: ./src/backend/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ==================== 3. 构建前端镜像 ====================
+  build-frontend:
+    name: Build Frontend Image
+    runs-on: ubuntu-latest
+    needs: version
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Frontend
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=
+            type=raw,value=${{ needs.version.outputs.version }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./src/frontend
+          file: ./src/frontend/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_API_KEY=${{ secrets.VITE_API_KEY }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ==================== 4. 部署到服务器 ====================
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+    needs: [build-backend, build-frontend, version]
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known_hosts
+        run: |
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy via SSH
+        env:
+          BACKEND_IMAGE: ${{ needs.build-backend.outputs.image }}
+          FRONTEND_IMAGE: ${{ needs.build-frontend.outputs.image }}
+          VERSION: ${{ needs.version.outputs.version }}
+          COMMIT: ${{ needs.version.outputs.commit }}
+          IS_RELEASE: ${{ needs.version.outputs.is_release }}
+        run: |
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+            set -e
+            cd ${{ env.DEPLOY_PATH }}
+            
+            # 更新 docker-compose.yml 中的镜像标签
+            sed -i "s|image:.*douyin-platform-app|image: ${BACKEND_IMAGE}|" docker-compose.yml
+            sed -i "s|image:.*douyin-platform-frontend|image: ${FRONTEND_IMAGE}|" docker-compose.yml
+            
+            # 拉取最新镜像
+            docker compose pull
+            
+            # 重启服务（滚动更新）
+            docker compose up -d --remove-orphans
+            
+            # 清理旧镜像
+            docker image prune -f
+            
+            echo "✅ Deployment completed!"
+            echo "Version: ${VERSION}"
+            echo "Commit: ${COMMIT}"
+            echo "Is Release: ${IS_RELEASE}"
+          EOF
+
+      - name: Health check
+        run: |
+          sleep 10
+          curl -f http://${{ secrets.SERVER_HOST }}:3000/health || exit 1
+          curl -f http://${{ secrets.SERVER_HOST }}:5000/api/v1/health || exit 1
+          echo "✅ Health checks passed"
+
+  # ==================== 5. 通知 ====================
+  notify:
+    name: Notify Result
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: always()
+    steps:
+      - name: Send notification
+        if: failure()
+        run: |
+          echo "❌ Deployment failed!"
+          # 可在此添加钉钉/飞书/企业微信通知
+          # curl -X POST ${{ secrets.WEBHOOK_URL }} -d '{"msg":"Deployment failed"}'
+
+      - name: Success notification
+        if: success()
+        run: |
+          echo "✅ Deployment successful!"
+          # curl -X POST ${{ secrets.WEBHOOK_URL }} -d '{"msg":"Deployment successful"}'

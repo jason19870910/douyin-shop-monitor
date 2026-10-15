@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#1890ff" />
+    <meta name="description" content="抖音电商数据监控平台" />
+    <title>抖音电商数据监控平台</title>
+    <!-- 运行时 API 地址注入（由 Nginx envsubst 替换占位符） -->
+    <!-- 默认留空，使用相对路径 /api/v1 由 Nginx 代理到后端 -->
+    <script>
+      window.__API_BASE_URL__ = '__API_BASE_URL__';
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+    <script type="module" src="/src/index.tsx"></script>
+  </body>
+</html>

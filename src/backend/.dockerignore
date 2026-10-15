@@ -35,6 +35,8 @@ htmlcov/
 
 # Project specific
 data/
+!data/version_info.json
+!data/changes_info.json
 logs/
 compliance_rules.json
 compliance_ignore.json
