@@ -1,94 +1,132 @@
 version: 2
 updates:
-  # GitHub Actions
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-    labels:
-      - "dependencies"
-      - "github-actions"
-    commit-message:
-      prefix: "ci"
-    groups:
-      github-actions:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  # Python (backend)
+  # ==================== Python (后端) ====================
   - package-ecosystem: "pip"
     directory: "/src/backend"
     schedule:
       interval: "weekly"
       day: "monday"
       time: "09:00"
-    labels:
-      - "dependencies"
-      - "python"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "python", "backend"]
     commit-message:
-      prefix: "deps(python)"
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
     groups:
-      backend-deps:
-        patterns: ["*"]
+      # 将相关依赖分组，减少 PR 数量
+      django:
+        patterns: ["django*"]
         update-types: ["minor", "patch"]
-      security-updates:
-        patterns: ["*"]
-        update-types: ["security"]
+      flask:
+        patterns: ["flask*"]
+        update-types: ["minor", "patch"]
+      redis:
+        patterns: ["redis*"]
+        update-types: ["minor", "patch"]
+      requests:
+        patterns: ["requests*"]
+        update-types: ["minor", "patch"]
+      testing:
+        patterns: ["pytest*", "mock*"]
+        update-types: ["minor", "patch"]
+        dependency-type: "development"
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+    ignore:
+      # 忽略 major 版本更新（需人工评估）
+      - dependency-name: "*"
+        update-type: "version-update:semver-major"
 
-  # Python (monitor service)
-  - package-ecosystem: "pip"
-    directory: "/opt/douyin-platform/apps/monitor"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-    labels:
-      - "dependencies"
-      - "python"
-      - "monitor"
-    commit-message:
-      prefix: "deps(monitor)"
-
-  # Node.js (frontend)
+  # ==================== Node.js (前端) ====================
   - package-ecosystem: "npm"
     directory: "/src/frontend"
     schedule:
       interval: "weekly"
       day: "monday"
       time: "09:00"
-    labels:
-      - "dependencies"
-      - "frontend"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "node", "frontend"]
     commit-message:
-      prefix: "deps(frontend)"
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
     groups:
-      frontend-deps:
-        patterns: ["*"]
+      react:
+        patterns: ["react*", "@types/react*"]
         update-types: ["minor", "patch"]
-      security-updates:
-        patterns: ["*"]
-        update-types: ["security"]
+      vite:
+        patterns: ["vite*", "@vitejs/*"]
+        update-types: ["minor", "patch"]
+      antd:
+        patterns: ["antd", "@ant-design/*"]
+        update-types: ["minor", "patch"]
+      typescript:
+        patterns: ["typescript", "@types/*"]
+        update-types: ["minor", "patch"]
+      testing:
+        patterns: ["jest*", "@testing-library/*", "vitest*"]
+        update-types: ["minor", "patch"]
+        dependency-type: "development"
+      linting:
+        patterns: ["eslint*", "prettier*", "@typescript-eslint/*"]
+        update-types: ["minor", "patch"]
+        dependency-type: "development"
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+    ignore:
+      - dependency-name: "*"
+        update-type: "version-update:semver-major"
 
-  # Docker
-  - package-ecosystem: "docker"
+  # ==================== GitHub Actions ====================
+  - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
       time: "09:00"
-    labels:
-      - "dependencies"
-      - "docker"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "github-actions"]
     commit-message:
-      prefix: "ci(docker)"
+      prefix: "ci(deps)"
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    allow:
+      - dependency-type: "direct"
+    ignore:
+      - dependency-name: "*"
+        update-type: "version-update:semver-major"
 
-# Allow dependabot to use secrets for private registries
-# (if you have private packages)
-# registries:
-#   my-private-registry:
-#     type: docker-registry
-#     url: registry.example.com
-#     username: ${{ secrets.REGISTRY_USERNAME }}
-#     password: ${{ secrets.REGISTRY_PASSWORD }}
+  # ==================== Docker 基础镜像 ====================
+  - package-ecosystem: "docker"
+    directory: "/src/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker", "backend"]
+    commit-message:
+      prefix: "ci(deps-docker)"
+    allow:
+      - dependency-type: "direct"
+
+  - package-ecosystem: "docker"
+    directory: "/src/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker", "frontend"]
+    commit-message:
+      prefix: "ci(deps-docker)"
+    allow:
+      - dependency-type: "direct"

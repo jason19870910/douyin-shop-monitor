@@ -1,0 +1,32 @@
+name: Dependabot Auto Merge
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write
+  contents: read
+  statuses: read
+
+jobs:
+  auto-merge:
+    name: Auto-merge Dependabot PRs
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Auto-merge patch/minor updates
+        uses: ahmadnassri/action-dependabot-auto-merge@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          merge-method: squash
+          merge-label: ""
+          merge-minor: true
+          merge-patch: true
+          merge-major: false
+          target-branch: main
+          required-status-checks: "ci-cd"
+          pr-title-regex: "^chore\\(deps(-dev)?\\):"
