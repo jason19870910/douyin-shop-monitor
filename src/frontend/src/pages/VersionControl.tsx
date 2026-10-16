@@ -57,7 +57,7 @@ const VersionControl = () => {
   };
 
   // 格式化版本显示：语义化版本优先，commit 作为次要
-  const formatVersionDisplay = (version: string, commit: string) => {
+  const formatVersionDisplay = (version: string, commit: string): React.ReactNode => {
     const source = getVersionSource(version);
     if (source.label === 'Release 版本') {
       return (
@@ -98,7 +98,7 @@ const VersionControl = () => {
           <Col xs={24} md={12}>
             <Statistic
               title="版本号"
-              value={formatVersionDisplay(versionInfo.version, versionInfo.commit)}
+              value={formatVersionDisplay(versionInfo.version, versionInfo.commit) as any}
               prefix={<Tag color="info">VERSION</Tag>}
               valueStyle={{ fontSize: 20, fontWeight: 600 }}
             />
@@ -312,7 +312,7 @@ const VersionControl = () => {
           <Card>
             <Statistic
               title="当前版本"
-              value={formatVersionDisplay(versionInfo?.version || '加载中...', versionInfo?.commit || '')}
+              value={formatVersionDisplay(versionInfo?.version || '加载中...', versionInfo?.commit || '') as any}
               valueStyle={{ fontSize: 16, fontWeight: 500, fontFamily: 'monospace' }}
               prefix={<Tag color="info">VER</Tag>}
             />
