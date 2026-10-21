@@ -7,6 +7,12 @@ vi.mock('axios', () => {
     post: vi.fn(),
     put: vi.fn(),
     delete: vi.fn(),
+    // axios.create 实例自带 defaults.headers.common（生产代码 setDefaultHeaders 依赖）
+    defaults: {
+      headers: {
+        common: {} as Record<string, string>,
+      },
+    },
     interceptors: {
       request: { use: vi.fn() },
       response: { use: vi.fn() },

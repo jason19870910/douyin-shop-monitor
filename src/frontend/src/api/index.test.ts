@@ -222,7 +222,7 @@ describe('API 模块', () => {
 
       const result = await syncApi.manualSync();
 
-      expect(mockApi.post).toHaveBeenCalledWith('/sync/manual');
+      expect(mockApi.post).toHaveBeenCalledWith('/sync/manual', { params: { async: false } });
       expect(result).toEqual(innerData);
     });
   });
