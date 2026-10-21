@@ -1,0 +1,48 @@
+name: CI Debug
+
+on:
+  push:
+    branches: [main, master]
+
+jobs:
+  debug:
+    name: Debug Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend dependencies
+        working-directory: src/backend
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run pytest diagnostics
+        run: |
+          set +e
+          {
+            python -V
+            which python pytest
+            python -c "import sys; print(sys.executable)"
+            pip show pytest | head -2
+          } > ver.log 2>&1
+          pytest -c pytest.ini --collect-only -q > collect.log 2>&1
+          echo "COLLECT_EXIT=$?" >> ver.log
+          pytest -c pytest.ini -v --tb=long > run.log 2>&1
+          echo "RUN_EXIT=$?" >> ver.log
+          cat ver.log
+          echo "--- collect.log tail ---"
+          tail -15 collect.log
+          {
+            echo "=== VER ==="; cat ver.log
+            echo "=== COLLECT ==="; head -c 3000 collect.log
+            echo "=== RUN ==="; head -c 3000 run.log
+          } > ann.txt
+          while IFS= read -r line; do echo "::error::$line"; done < ann.txt
+          exit 0
