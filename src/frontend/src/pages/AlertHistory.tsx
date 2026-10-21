@@ -29,12 +29,24 @@ const ALERT_TYPE_LABELS: Record<string, string> = {
   sales_drop: '销量下跌',
   low_inventory: '库存不足',
   conversion_drop: '转化率下跌',
+  video_view_drop: '播放量下跌',
+  video_like_drop: '点赞数下跌',
+  creator_follower_drop: '粉丝流失',
+  dian_product_sales_drop: '商品销量下跌',
+  order_refund_rate: '订单退款率',
+  dian_compliance_risk: '合规风险',
 };
 
 const ALERT_TYPE_COLORS: Record<string, string> = {
   sales_drop: 'red',
   low_inventory: 'orange',
   conversion_drop: 'volcano',
+  video_view_drop: 'blue',
+  video_like_drop: 'geekblue',
+  creator_follower_drop: 'purple',
+  dian_product_sales_drop: 'magenta',
+  order_refund_rate: 'gold',
+  dian_compliance_risk: 'lime',
 };
 
 const AlertHistory = () => {
@@ -209,6 +221,12 @@ const AlertHistory = () => {
                 { label: '销量下跌', value: 'sales_drop' },
                 { label: '库存不足', value: 'low_inventory' },
                 { label: '转化率下跌', value: 'conversion_drop' },
+                { label: '播放量下跌', value: 'video_view_drop' },
+                { label: '点赞数下跌', value: 'video_like_drop' },
+                { label: '粉丝流失', value: 'creator_follower_drop' },
+                { label: '商品销量下跌', value: 'dian_product_sales_drop' },
+                { label: '订单退款率', value: 'order_refund_rate' },
+                { label: '合规风险', value: 'dian_compliance_risk' },
               ]}
             />
             <Button icon={<ReloadOutlined />} onClick={handleRefetch} loading={isLoading}>

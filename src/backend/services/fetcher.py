@@ -137,12 +137,19 @@ VIDEOS_FILE = DATA_DIR / 'videos.json'
 ACCOUNTS_FILE = DATA_DIR / 'accounts.json'
 COMPLIANCE_FILE = DATA_DIR / 'compliance.json'  # 合规日志
 COMPLIANCE_RULES_FILE = DATA_DIR / 'compliance_rules.json'  # 合规规则（权威源）
+# 合规日志保留上限（Redis + 文件一致），防止无限增长拖慢读写
+COMPLIANCE_LOG_LIMIT = 10000
+# 仅记录违规/告警结果（fail/warning/error），pass 流水不落日志，
+# 避免违规列表被海量通过记录淹没
+COMPLIANCE_LOG_STATUSES = ('fail', 'warning', 'error')
 MEDIA_FILE = DATA_DIR / 'media.json'
 AUTH_FILE = DATA_DIR / 'auth.json'
 CREATOR_WORKS_FILE = DATA_DIR / 'creator_works.json'
 ALERT_CONFIG_FILE = DATA_DIR / 'alert_config.json'
 ALERT_DOUYIN_CONFIG_FILE = DATA_DIR / 'alert_douyin_config.json'
 ALERT_DIAN_CONFIG_FILE = DATA_DIR / 'alert_dian_config.json'
+# 抖音告警“较前一日对比”所需的每日指标快照（视频播放/点赞、创作者粉丝数）
+DOUYIN_ALERT_SNAPSHOT_FILE = DATA_DIR / 'douyin_alert_snapshot.json'
 
 # Default configurations
 DEFAULT_ALERT_CONFIG = {
@@ -261,10 +268,20 @@ def get_creator_cookies() -> dict:
 
 
 def save_json_file(file_path: Path, data: Any) -> None:
-    """Save data to JSON file."""
+    """Save data to JSON file atomically (write tmp + os.replace).
+
+    原子写避免检测过程中进程中断/重启导致 compliance.json 等文件被截断，
+    进而丢失全部违规记录。
+    """
     try:
-        with open(file_path, 'w', encoding='utf-8') as f:
+        file_path = Path(file_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = file_path.with_name(file_path.name + '.tmp')
+        with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, file_path)
     except Exception as e:
         logger.error(f"Failed to save JSON to {file_path}: {e}")
 
@@ -322,17 +339,26 @@ def _fetch_products_from_api() -> List[Dict[str, Any]]:
     
     params = base_params
     
-    cookie_str = os.getenv('FXG_COOKIES', '')
+    cookie_str = os.getenv('FXG_COOKIES') or os.getenv('FXG_COOKIE', '')
     headers = {
         'User-Agent': Config.USER_AGENT,
         'Referer': 'https://fxg.jinritemai.com/product/tproduct/list',
         'Cookie': cookie_str,
     }
-    
+
     resp = requests.get(endpoint, params=params, headers=headers, timeout=30)
     resp.raise_for_status()
     result = resp.json()
-    
+
+    # 检查外部 API 业务错误码（如 Cookie 过期、签名错误等）
+    # 外部 API 实际返回格式：{ st, msg, code, data: [...], page, size, total }
+    # st 是系统处理状态（st=10000 正常），code 才是业务状态：code=0 成功；10008=登录失效、10001010A=风控等
+    api_code = result.get('code')
+    if api_code is not None and str(api_code) != '0':
+        error_msg = f"FXG API 业务错误: code={api_code}, msg={result.get('msg', '未知错误')}"
+        logger.error(error_msg)
+        raise requests.HTTPError(error_msg)
+
     # 外部 API 实际返回格式：{ st, msg, code, data: [...], page, size, total }
     # data 是直接的产品列表，不是包含 products 键的字典
     data_block = result.get('data')
@@ -487,7 +513,7 @@ def _fetch_orders_from_api() -> List[Dict[str, Any]]:
     if fp:
         base_params['fp'] = fp
     
-    cookie_str = os.getenv('FXG_COOKIES', '')
+    cookie_str = os.getenv('FXG_COOKIES') or os.getenv('FXG_COOKIE', '')
     cookies = {}
     if cookie_str:
         for pair in cookie_str.split(';'):
@@ -988,11 +1014,14 @@ def fetch_and_check_compliance() -> Dict[str, Any]:
                 'pass': 0,
                 'fail': 0,
                 'warning': 0,
+                'haohuo_enriched': 0,
+                'haohuo_failed': 0,
                 'details': []
             }
         
         rules = cache.get(CACHE_KEYS['compliance_rules'], [])
-        enabled_rules = [r for r in rules if r.get('enabled', True)]
+        # 仅保留启用且适用商品目标的规则（applicable_to 缺失的旧规则默认适用全部目标）
+        enabled_rules = filter_rules_for_target(rules, 'product')
         
         if not enabled_rules:
             logger.warning("No enabled compliance rules found")
@@ -1003,6 +1032,8 @@ def fetch_and_check_compliance() -> Dict[str, Any]:
                 'pass': 0,
                 'fail': 0,
                 'warning': 0,
+                'haohuo_enriched': 0,
+                'haohuo_failed': 0,
                 'details': []
             }
         
@@ -1015,35 +1046,62 @@ def fetch_and_check_compliance() -> Dict[str, Any]:
         total_pass = 0
         total_fail = 0
         total_warning = 0
-        
+        violation_entries = []
+        haohuo_enriched = 0
+        haohuo_failed = 0
         for product in products:
             product_id = str(product.get('product_id') or product.get('id') or '')
             product_name = product.get('product_name', 'Unknown Product')
-            
+
             if not product_id:
                 logger.warning("Skipping product without ID: {}".format(product_name))
                 continue
-            
+
             total_checked += 1
-            
+
+            # 统一构建 target_data（与手动检测 check_products 口径一致），
+            # 并拉取好货预览数据增强，保证 HAOHUO_* 规则能拿到 product_format 等字段
+            target_data = {
+                'product_id': product_id,
+                'product_title': product_name,
+                'description': product.get('description') or product.get('product_intro', ''),
+                'category_name': product.get('category_name', ''),
+                'price': product.get('price', 0),
+                # 保留原始商品完整数据，供规则引用
+                '_raw_product': product,
+            }
+
+            enriched, haohuo_err = _enrich_product_with_haohuo(target_data, product_id)
+            if enriched:
+                haohuo_enriched += 1
+            if haohuo_err:
+                haohuo_failed += 1
+
+            # 规则 severity 映射：插件 outcome 多数不带 severity，
+            # 由规则配置兜底传导到违规日志（详情页 severity 列展示）
+            rule_severity_map = {
+                (r.get('rule_id') or r.get('id')): (r.get('severity') or '')
+                for r in enabled_rules if isinstance(r, dict)
+            }
+
             outcomes = run_compliance_check(
-                target_data=product,
+                target_data=target_data,
                 target_type='product',
                 target_id=product_id,
                 rules=enabled_rules
             )
-            
+
             product_results = {
                 'product_id': product_id,
                 'product_name': product_name,
                 'checked_at': datetime.now().isoformat(),
                 'rule_results': []
             }
-            
+
             product_pass = 0
             product_fail = 0
             product_warning = 0
-            
+
             for outcome in outcomes:
                 if outcome.status == CheckResult.FAIL:
                     product_fail += 1
@@ -1051,7 +1109,7 @@ def fetch_and_check_compliance() -> Dict[str, Any]:
                     product_warning += 1
                 elif outcome.status == CheckResult.PASS:
                     product_pass += 1
-                
+
                 log_entry = {
                     'id': "log_" + str(int(datetime.now().timestamp())) + "_" + str(outcome.rule_id),
                     'rule_id': outcome.rule_id,
@@ -1066,7 +1124,7 @@ def fetch_and_check_compliance() -> Dict[str, Any]:
                     'checked_at': outcome.checked_at,
                     'execution_time_ms': outcome.execution_time_ms
                 }
-                
+
                 product_results['rule_results'].append({
                     'rule_id': outcome.rule_id,
                     'rule_name': outcome.rule_name,
@@ -1077,9 +1135,20 @@ def fetch_and_check_compliance() -> Dict[str, Any]:
                     'matched_content': outcome.matched_content,
                     'execution_time_ms': outcome.execution_time_ms
                 })
-                
+
+                # 仅记录违规/告警结果（fail/warning/error），pass 流水不落日志，
+                # 保持"只展示违规记录"现状，避免违规列表被通过记录淹没
+                if log_entry['status'] in COMPLIANCE_LOG_STATUSES:
+                    violation_entries.append(build_compliance_log_entry(
+                        target_type='product',
+                        target_id=product_id,
+                        target_name=product_name,
+                        outcome=outcome,
+                        severity=rule_severity_map.get(outcome.rule_id, ''),
+                    ))
+
                 all_results.append(log_entry)
-            
+
             if product_fail > 0:
                 product_results['overall_status'] = 'fail'
                 total_fail += 1
@@ -1089,9 +1158,9 @@ def fetch_and_check_compliance() -> Dict[str, Any]:
             else:
                 product_results['overall_status'] = 'pass'
                 total_pass += 1
-            
-            _append_compliance_log(product_results)
-        
+
+        # 批量一次性写入（替代逐产品全量重写日志文件的 O(N*总量) 开销）
+        _append_compliance_logs(violation_entries)
         logger.info("Compliance check completed: checked={}, pass={}, fail={}, warning={}".format(total_checked, total_pass, total_fail, total_warning))
         
         return {
@@ -1101,6 +1170,8 @@ def fetch_and_check_compliance() -> Dict[str, Any]:
             'pass': total_pass,
             'fail': total_fail,
             'warning': total_warning,
+            'haohuo_enriched': haohuo_enriched,
+            'haohuo_failed': haohuo_failed,
             'details': all_results
         }
         
@@ -1117,48 +1188,286 @@ def fetch_and_check_compliance() -> Dict[str, Any]:
         }
 
 
-def _append_compliance_log(log_entry):
-    """Append a compliance check result to the logs cache and file."""
+def filter_rules_for_target(rules: List[Dict[str, Any]], target_type: str) -> List[Dict[str, Any]]:
+    """过滤已启用且适用目标类型为 target_type 的规则。
+
+    applicable_to 缺失的旧规则默认适用于所有目标类型，
+    保证周期任务与手动检测（商品/作品）规则口径一致。
+    """
+    filtered = []
+    for r in rules or []:
+        if not r.get('enabled', True):
+            continue
+        applicable = r.get('applicable_to')
+        if applicable is None:
+            filtered.append(r)  # 旧规则未配置适用目标，默认全部适用
+        elif isinstance(applicable, str):
+            if applicable == target_type:
+                filtered.append(r)
+        elif isinstance(applicable, list):
+            if target_type in applicable:
+                filtered.append(r)
+    return filtered
+
+
+def _enrich_product_with_haohuo(target_data: Dict[str, Any], product_id: str) -> Tuple[bool, bool]:
+    """拉取好货（Haohuo）预览数据并合并进 target_data。
+
+    Returns:
+        (enriched, failed)：成功合并返回 (True, False)；拉取失败返回 (False, True)，
+        失败仅记录标记，不阻断检测。
+    """
     try:
-        existing_logs = cache.get(CACHE_KEYS['compliance_logs'], [])
-        if not isinstance(existing_logs, list):
-            existing_logs = []
-        
-        if 'rule_results' in log_entry:
-            for rule_result in log_entry['rule_results']:
-                entry = {
-                    # 毫秒时间戳 + uuid 后缀，确保每条记录 ID 唯一（rowKey 冲突会导致表格渲染错乱）
-                    'id': "log_" + str(int(datetime.now().timestamp() * 1000)) + "_" + str(rule_result['rule_id']) + "_" + uuid.uuid4().hex[:6],
-                    'rule_id': rule_result['rule_id'],
-                    'rule_name': rule_result['rule_name'],
-                    'rule_type': rule_result['rule_type'],
-                    'target_type': 'product',
-                    'target_id': log_entry['product_id'],
-                    'target_name': log_entry['product_name'],
-                    'status': rule_result['status'],
-                    'details': rule_result['details'],
-                    'matched_content': rule_result.get('matched_content'),
-                    'checked_at': log_entry['checked_at'],
-                    # 前端"处理时间"列读取 created_at/updated_at，与 checked_at 保持一致
-                    'created_at': log_entry.get('checked_at'),
-                    'updated_at': log_entry.get('checked_at'),
-                    'execution_time_ms': rule_result.get('execution_time_ms', 0)
-                }
-                existing_logs.insert(0, entry)
-        else:
-            existing_logs.insert(0, log_entry)
-        
-        if len(existing_logs) > 10000:
-            existing_logs = existing_logs[:10000]
-        
-        cache.set(CACHE_KEYS['compliance_logs'], existing_logs)
-        save_json_file(COMPLIANCE_FILE, existing_logs)
-        
+        preview_data = fetch_haohuo_product_preview(product_id)
+        status_code = preview_data.get('status_code', 0)
+        # 抖音接口约定 status_code=0 表示成功，兼容 HTTP 200
+        if status_code in (0, 200) and preview_data.get('detail_info'):
+            target_data['haohuo_detail_info'] = preview_data.get('detail_info', {})
+            target_data['haohuo_extra'] = preview_data.get('extra', {})
+            target_data['haohuo_log_pb'] = preview_data.get('log_pb', {})
+            target_data['haohuo_status_code'] = status_code
+            logger.info(f"Enriched product {product_id} with Haohuo preview data")
+            return True, False
+        target_data['haohuo_status_code'] = status_code
+        target_data['haohuo_error'] = preview_data.get('status_msg', 'Unknown error')
+        logger.warning(f"Haohuo preview failed for product {product_id}: status_code={status_code}")
+        return False, True
     except Exception as e:
-        logger.error("Failed to append compliance log: {}".format(e))
+        logger.error(f"Error fetching Haohuo preview for product {product_id}: {e}")
+        target_data['haohuo_status_code'] = -1
+        target_data['haohuo_error'] = str(e)
+        return False, True
+
+
+def build_compliance_log_entry(
+    target_type: str,
+    target_id: str,
+    target_name: str,
+    outcome,
+    category: str = '',
+    severity: str = ''
+) -> Dict[str, Any]:
+    """统一的违规日志记录构造器（周期任务与手动检测共用同一 schema）。
+
+    ID 以真实目标 ID 开头 + 毫秒时间戳 + uuid 后缀，保证唯一（前端表格 rowKey）。
+    """
+    status = outcome.status.value if hasattr(outcome.status, 'value') else str(outcome.status)
+    rule_type = outcome.rule_type.value if hasattr(outcome.rule_type, 'value') else str(outcome.rule_type)
+    details = outcome.details if isinstance(outcome.details, dict) else {}
+    now_iso = datetime.now().isoformat()
+    default_category = '商品合规' if target_type == 'product' else '作品合规'
+    return {
+        'id': "log_{}_{}_{}_{}".format(
+            target_id, outcome.rule_id,
+            int(datetime.now().timestamp() * 1000), uuid.uuid4().hex[:6]
+        ),
+        'rule_id': outcome.rule_id,
+        'rule_name': outcome.rule_name,
+        'rule_type': rule_type,
+        'target_type': target_type,
+        'target_id': target_id,
+        'target_name': target_name,
+        'status': status,
+        'category': category or details.get('category') or default_category,
+        'severity': severity or details.get('severity') or details.get('risk_level') or '',
+        'keyword': outcome.matched_content or outcome.message or '',
+        'details': details,
+        'matched_content': outcome.matched_content,
+        'checked_at': outcome.checked_at,
+        # 前端"处理时间"列读取 created_at/updated_at，与 checked_at 保持一致
+        'created_at': now_iso,
+        'updated_at': now_iso,
+        'execution_time_ms': getattr(outcome, 'execution_time_ms', 0)
+    }
+
+
+def _load_compliance_logs() -> List[Dict[str, Any]]:
+    """读取合规日志：优先 Redis 缓存，缓存缺失/非列表时回退 DATA_DIR 文件。"""
+    logs = cache.get(CACHE_KEYS['compliance_logs'], None)
+    if not isinstance(logs, list) or len(logs) == 0:
+        if COMPLIANCE_FILE.exists():
+            try:
+                with open(COMPLIANCE_FILE, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, list) and loaded:
+                    logs = loaded
+            except Exception as e:
+                logger.warning(f"Failed to load compliance logs from file: {e}")
+    if not isinstance(logs, list):
+        logs = []
+    return logs
+
+
+def _persist_compliance_logs(logs: List[Dict[str, Any]]) -> None:
+    """持久化合规日志：写 Redis 缓存 + 原子写 DATA_DIR 文件。"""
+    cache.set(CACHE_KEYS['compliance_logs'], logs)
+    save_json_file(COMPLIANCE_FILE, logs)
+
+
+def _append_compliance_logs(entries: List[Dict[str, Any]]) -> None:
+    """批量追加违规日志记录（一次缓存写 + 一次原子文件写）。"""
+    if not entries:
+        return
+    try:
+        existing_logs = _load_compliance_logs()
+        for entry in entries:
+            existing_logs.insert(0, entry)
+        if len(existing_logs) > COMPLIANCE_LOG_LIMIT:
+            existing_logs = existing_logs[:COMPLIANCE_LOG_LIMIT]
+        _persist_compliance_logs(existing_logs)
+    except Exception as e:
+        logger.error("Failed to append compliance logs: {}".format(e))
+
+
+def _append_compliance_log(product_result):
+    """兼容旧调用方：把单个商品的检测结果拆成违规条目后批量写入。
+
+    仅记录违规/告警结果（fail/warning/error），pass 流水不落日志。
+    """
+    rule_results = product_result.get('rule_results', [])
+    entries = []
+    for rule_result in rule_results:
+        if rule_result.get('status') not in COMPLIANCE_LOG_STATUSES:
+            continue
+        entry = dict(rule_result)
+        entry['id'] = "log_{}_{}_{}_{}".format(
+            product_result.get('product_id', ''),
+            rule_result.get('rule_id', ''),
+            int(datetime.now().timestamp() * 1000),
+            uuid.uuid4().hex[:6]
+        )
+        entry['target_type'] = product_result.get('target_type', 'product')
+        entry['target_id'] = product_result.get('product_id', '')
+        entry['target_name'] = product_result.get('product_name', '')
+        now_iso = datetime.now().isoformat()
+        entry.setdefault('created_at', now_iso)
+        entry.setdefault('updated_at', now_iso)
+        entries.append(entry)
+    _append_compliance_logs(entries)
 
 
 # ==================== Compliance Rule Initialization ====================
+
+# 默认合规规则集：4 条好货（Haohuo）预览规则 + 1 条关键词规则。
+# 好货规则依赖 fetch_haohuo_product_preview 增强数据，是商品合规检测链路的核心；
+# 缺失其中任一类型，商品合规检测将直接失去对应能力（历史上曾因回退分支
+# 仅写入 1 条空关键词规则，导致 rule_haohuo_spec_v1 在规则管理中不可见）。
+HAOHUO_REQUIRED_RULE_TYPES = ('HAOHUO_SPEC', 'HAOHUO_IMAGE', 'HAOHUO_PRICE', 'HAOHUO_FATAL')
+
+
+def build_default_compliance_rules() -> List[Dict[str, Any]]:
+    """构建完整默认合规规则集（4 条 Haohuo 规则 + 1 条关键词规则）。"""
+    now = datetime.now().isoformat()
+
+    def _base(rule_id: str, rule_name: str, rule_type: str, rule_content: Dict[str, Any],
+              severity: str, category: str, enabled: bool = True) -> Dict[str, Any]:
+        return {
+            'id': rule_id,
+            'rule_id': rule_id,
+            'rule_name': rule_name,
+            'rule_type': rule_type,
+            'rule_content': rule_content,
+            'severity': severity,
+            'category': category,
+            'enabled': enabled,
+            'applicable_to': ['product'],
+            'created_at': now,
+            'updated_at': now,
+        }
+
+    return [
+        _base(
+            'rule_haohuo_spec_v1',
+            '好货商品规格/属性完整性检测',
+            'HAOHUO_SPEC',
+            {
+                'required_properties': ['颜色', '尺码', '规格'],
+                'min_format_groups': 1,
+                'check_property_id': True,
+                'check_message_desc': True,
+            },
+            'HIGH', '商品规格',
+        ),
+        _base(
+            'rule_haohuo_image_v1',
+            '好货商品图片合规检测',
+            'HAOHUO_IMAGE',
+            {
+                'min_width': 200,
+                'min_height': 200,
+                'check_watermark': True,
+                'check_aspect_ratio': True,
+                'allowed_aspect_ratios': [0.4, 3.0],
+                'banned_keywords': ['watermark', 'test', 'demo'],
+            },
+            'MEDIUM', '商品图片',
+        ),
+        _base(
+            'rule_haohuo_price_v1',
+            '好货商品价格/促销配置合规检测',
+            'HAOHUO_PRICE',
+            {
+                'price_unit': 'yuan',
+                'check_promotion_price': True,
+                'banned_promotion_keywords': ['全网最低', '绝对低价', '史上最低'],
+                'check_links': False,
+            },
+            'MEDIUM', '商品价格',
+        ),
+        _base(
+            'rule_haohuo_fatal_v1',
+            '好货商品异常标识告警',
+            'HAOHUO_FATAL',
+            {
+                'alert_on_any': True,
+                'severity': 'HIGH',
+            },
+            'HIGH', '商品异常',
+        ),
+        # 关键词规则默认停用（广告法极限词命中面广），需要在规则管理中手动启用
+        _base(
+            'rule_keyword_adlaw_v1',
+            '广告法极限词检测（默认停用）',
+            'KEYWORD',
+            {
+                'keywords': ['最好', '第一', '绝对', '全网最低', '史上最低', '100%有效'],
+                'fields': ['product_name', 'description', 'title'],
+                'case_sensitive': False,
+                'match_all': False,
+            },
+            'MEDIUM', '广告合规',
+            enabled=False,
+        ),
+    ]
+
+
+def ensure_haohuo_rules(rules: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """确保规则列表包含全部 Haohuo 规则类型，缺失的按默认配置补齐。
+
+    Returns:
+        (补齐后的规则列表, 本次补齐的 rule_id 列表)
+    """
+    if not isinstance(rules, list):
+        rules = []
+
+    existing_types = set()
+    for r in rules:
+        if not isinstance(r, dict):
+            continue
+        r_type = r.get('rule_type') or r.get('type') or ''
+        existing_types.add(str(r_type).upper())
+        # 兼容缺少 rule_id 的历史规则：用 id 归一化
+        if not r.get('rule_id') and r.get('id'):
+            r['rule_id'] = r['id']
+
+    missing = [t for t in HAOHUO_REQUIRED_RULE_TYPES if t not in existing_types]
+    if not missing:
+        return rules, []
+
+    defaults = [r for r in build_default_compliance_rules() if r['rule_type'] in missing]
+    merged = defaults + rules
+    return merged, [r['id'] for r in defaults]
+
 
 def _init_default_compliance_rules() -> Dict[str, Any]:
     """Initialize compliance rules from JSON file at startup (force reload).
@@ -1173,7 +1482,7 @@ def _init_default_compliance_rules() -> Dict[str, Any]:
     from pathlib import Path
     import json
     
-    rules_file = Path(__file__).parent.parent / 'data' / 'compliance_rules.json'
+    rules_file = COMPLIANCE_RULES_FILE
     
     # ✅ 方案1：启动时强制从 JSON 文件加载（优先级最高，确保跨重启一致性）
     if rules_file.exists():
@@ -1183,15 +1492,17 @@ def _init_default_compliance_rules() -> Dict[str, Any]:
             # 验证规则结构基本合法
             if isinstance(loaded_rules, list) and len(loaded_rules) > 0:
                 logger.info(f"Loaded {len(loaded_rules)} compliance rules from file (startup forced)")
+                # 补齐缺失的好货规则（防止历史文件被清空后检测链路断掉）
+                merged_rules, added_ids = ensure_haohuo_rules(loaded_rules)
+                if added_ids:
+                    logger.warning(f"Haohuo rules missing in file, auto-added: {added_ids}")
+                    try:
+                        save_json_file(rules_file, merged_rules)
+                    except Exception as e:
+                        logger.warning(f"Failed to persist auto-added haohuo rules: {e}")
                 # 始终同步到缓存
-                cache.set(CACHE_KEYS['compliance_rules'], loaded_rules)
-                # 确保文件持久化（防止手动修改丢失）
-                try:
-                    with open(rules_file, 'w', encoding='utf-8') as f:
-                        json.dump(loaded_rules, f, ensure_ascii=False, indent=2)
-                except Exception:
-                    pass  # 文件已存在且已读取成功
-                return {'status': 'loaded_from_file', 'count': len(loaded_rules)}
+                cache.set(CACHE_KEYS['compliance_rules'], merged_rules)
+                return {'status': 'loaded_from_file', 'count': len(merged_rules)}
             else:
                 logger.warning("compliance_rules.json is empty, falling back to cache/fallback")
         except Exception as e:
@@ -1201,43 +1512,37 @@ def _init_default_compliance_rules() -> Dict[str, Any]:
     rules = cache.get(CACHE_KEYS['compliance_rules'], None)
     if rules is not None and len(rules) > 0:
         logger.info(f"Using {len(rules)} compliance rules from cache (file empty/missing)")
-        return {'status': 'used_from_cache', 'count': len(rules)}
+        # 同样补齐好货规则，保证缓存路径下检测链路不断
+        merged_rules, added_ids = ensure_haohuo_rules(rules)
+        if added_ids:
+            logger.warning(f"Haohuo rules missing in cache, auto-added: {added_ids}")
+            cache.set(CACHE_KEYS['compliance_rules'], merged_rules)
+            try:
+                save_json_file(rules_file, merged_rules)
+            except Exception as e:
+                logger.warning(f"Failed to persist auto-added haohuo rules: {e}")
+        return {'status': 'used_from_cache', 'count': len(merged_rules)}
     
-    # ✅ 最后才回退：创建最小默认规则（不再生成大量 mock 数据）
-    # 创建仅 1 条基础规则，确保系统可用而非充满模拟数据
-    default_rules = [
-        {
-            'id': f"rule_{int(datetime.now().timestamp())}_base",
-            'rule_name': '基础合规检测',
-            'rule_type': 'KEYWORD',
-            'rule_content': {
-                'keywords': [],
-                'fields': ['product_name', 'description'],
-                'case_sensitive': False,
-                'match_all': False
-            },
-            'severity': 'LOW',
-            'category': '基础合规',
-            'enabled': True
-        }
-    ]
-    
+    # ✅ 最后才回退：创建完整默认规则集（4 条好货规则 + 1 条关键词规则）
+    # 好货规则是店铺合规检测链路的核心，缺失会导致检测链路直接断掉
+    default_rules = build_default_compliance_rules()
+
     # 存储规则到缓存和文件
     cache.set(CACHE_KEYS['compliance_rules'], default_rules)
-    
+
     # 持久化到 JSON 文件（确保下次启动能读取）
     rules_file.parent.mkdir(parents=True, exist_ok=True)
     try:
         with open(rules_file, 'w', encoding='utf-8') as f:
             json.dump(default_rules, f, ensure_ascii=False, indent=2)
-        logger.info("Created 1 default compliance rule and persisted to file")
+        logger.info(f"Created {len(default_rules)} default compliance rules and persisted to file")
     except Exception as e:
         logger.warning(f"Failed to persist default rules to file: {e}")
-    
-    logger.info(f"Initialized {len(default_rules)} default compliance rule (fallback)")
+
+    logger.info(f"Initialized {len(default_rules)} default compliance rules (fallback)")
     return {
         'status': 'initialized',
-        'message': f'Initialized {len(default_rules)} default compliance rule (fallback)',
+        'message': f'Initialized {len(default_rules)} default compliance rules (fallback)',
         'count': len(default_rules),
         'rules': [{'id': r['id'], 'rule_name': r['rule_name'], 'rule_type': r['rule_type'], 'enabled': r['enabled']} for r in default_rules]
     }
@@ -1254,15 +1559,15 @@ def get_alert_config() -> Dict[str, Any]:
     return config
 
 
-def check_alerts() -> Dict[str, Any]:
-    """Check alert conditions and send notifications if needed."""
+def _check_general_alerts() -> Dict[str, Any]:
+    """Check general alert conditions (alert_config) and send notifications if needed."""
     alert_config = get_alert_config()
     
     if not alert_config.get('enabled', True):
         return {'status': 'skipped', 'reason': 'alerts disabled'}
     
-    logger.info("Checking alert conditions...")
-    
+    logger.info("Checking general alert conditions...")
+
     products = cache.get(CACHE_KEYS['products'], [])
     alerts_triggered = []
     
@@ -1326,16 +1631,321 @@ def check_alerts() -> Dict[str, Any]:
                 save_alert_to_history(alert)
                 send_alert_notification(alert)
     
-    logger.info(f"Alert check completed. Triggered {len(alerts_triggered)} alerts")
+    logger.info(f"General alert check completed. Triggered {len(alerts_triggered)} alerts")
     return {'status': 'success', 'alerts_triggered': len(alerts_triggered)}
 
 
-def send_alert_notification(alert: Dict[str, Any]) -> None:
-    """Send alert notification via WeChat Work webhook and email."""
+def get_douyin_alert_config() -> Dict[str, Any]:
+    """Get current douyin alert configuration from Redis cache."""
+    config = cache.get(CACHE_KEYS['alert_douyin_config'])
+    if config is None:
+        return DEFAULT_ALERT_DOUYIN_CONFIG.copy()
+    return config
+
+
+def get_dian_alert_config() -> Dict[str, Any]:
+    """Get current dian alert configuration from Redis cache."""
+    config = cache.get(CACHE_KEYS['alert_dian_config'])
+    if config is None:
+        return DEFAULT_ALERT_DIAN_CONFIG.copy()
+    return config
+
+
+def _load_douyin_alert_snapshot() -> Dict[str, Any]:
+    """Load daily douyin metrics snapshot used for day-over-day comparisons."""
+    try:
+        if DOUYIN_ALERT_SNAPSHOT_FILE.exists():
+            with open(DOUYIN_ALERT_SNAPSHOT_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception as e:
+        logger.warning(f"Failed to load douyin alert snapshot: {e}")
+    return {}
+
+
+def _save_douyin_alert_snapshot(snapshot: Dict[str, Any]) -> None:
+    """Persist daily douyin metrics snapshot to file."""
+    try:
+        save_json_file(DOUYIN_ALERT_SNAPSHOT_FILE, snapshot)
+    except Exception as e:
+        logger.warning(f"Failed to save douyin alert snapshot: {e}")
+
+
+def check_douyin_alerts() -> Dict[str, Any]:
+    """Check Douyin alert conditions per alert_douyin_config.
+
+    比较维度（均相对前一快照日，即页面承诺的"较前一日"）：
+    - 视频播放量下跌 >= video_view_drop_threshold
+    - 视频点赞数下跌 >= video_like_drop_threshold
+    - 创作者粉丝数下跌 >= creator_follower_drop_threshold
+
+    enabled=False 时直接跳过——这是"启用抖音告警"开关的生效落点。
+    """
+    config = get_douyin_alert_config()
+
+    if not config.get('enabled', True):
+        return {'status': 'skipped', 'reason': 'douyin alerts disabled'}
+
+    logger.info("Checking Douyin alert conditions...")
+
+    videos = cache.get(CACHE_KEYS['videos'], None)
+    if not videos:
+        videos = _load_videos_from_file()
+    if not isinstance(videos, list):
+        videos = []
+
+    creators = cache.get(CACHE_KEYS['creators'], None)
+    if not isinstance(creators, list):
+        creators = []
+
+    current_videos: Dict[str, Dict[str, Any]] = {}
+    for video in videos:
+        video_id = str(video.get('video_id') or '')
+        if not video_id:
+            continue
+        current_videos[video_id] = {
+            'title': video.get('title', ''),
+            'play_count': int(video.get('play_count') or 0),
+            'like_count': int(video.get('like_count') or 0),
+        }
+
+    current_followers = 0
+    for creator in creators:
+        current_followers = max(current_followers, int(creator.get('total_followers') or 0))
+
+    if not current_videos and current_followers == 0:
+        # 数据为空（API 未接通 / Cookie 失效）：保留上一快照，不清基线、不判定
+        return {'status': 'success', 'alerts_triggered': 0, 'reason': 'no douyin metrics data'}
+
+    today = datetime.now().strftime('%Y-%m-%d')
+    snapshot = _load_douyin_alert_snapshot()
+    baseline_date = str(snapshot.get('date') or '')
+    baseline = snapshot.get('metrics') or {}
+    baseline_videos = baseline.get('videos') or {}
+    baseline_followers = int(baseline.get('total_followers') or 0)
+
+    alerts_triggered: List[Dict[str, Any]] = []
+    email = config.get('notification_email')
+
+    view_threshold = float(config.get('video_view_drop_threshold') or 0)
+    like_threshold = float(config.get('video_like_drop_threshold') or 0)
+    follower_threshold = float(config.get('creator_follower_drop_threshold') or 0)
+
+    # 仅当快照存在且不是今天时才做"较前一日"对比；
+    # 同日重复运行不重复告警，首次运行时记录今天的指标作为新基线
+    if baseline_date and baseline_date != today:
+        for video_id, metrics in current_videos.items():
+            previous = baseline_videos.get(video_id) or {}
+            title = metrics['title'] or video_id
+
+            prev_play = int(previous.get('play_count') or 0)
+            if prev_play > 0 and view_threshold > 0:
+                drop_rate = (prev_play - metrics['play_count']) / prev_play
+                if drop_rate >= view_threshold:
+                    alert = {
+                        'type': 'video_view_drop',
+                        'video_id': video_id,
+                        'product_name': title,
+                        'message': f"视频「{title}」播放量较前一日下跌 {drop_rate:.1%}（{prev_play} -> {metrics['play_count']}）",
+                        'drop_rate': drop_rate,
+                        'threshold': view_threshold,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    alerts_triggered.append(alert)
+                    save_alert_to_history(alert)
+                    send_alert_notification(alert, email=email)
+
+            prev_like = int(previous.get('like_count') or 0)
+            if prev_like > 0 and like_threshold > 0:
+                drop_rate = (prev_like - metrics['like_count']) / prev_like
+                if drop_rate >= like_threshold:
+                    alert = {
+                        'type': 'video_like_drop',
+                        'video_id': video_id,
+                        'product_name': title,
+                        'message': f"视频「{title}」点赞数较前一日下跌 {drop_rate:.1%}（{prev_like} -> {metrics['like_count']}）",
+                        'drop_rate': drop_rate,
+                        'threshold': like_threshold,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    alerts_triggered.append(alert)
+                    save_alert_to_history(alert)
+                    send_alert_notification(alert, email=email)
+
+        if baseline_followers > 0 and current_followers > 0 and follower_threshold > 0:
+            drop_rate = (baseline_followers - current_followers) / baseline_followers
+            if drop_rate >= follower_threshold:
+                alert = {
+                    'type': 'creator_follower_drop',
+                    'product_name': '创作者粉丝',
+                    'message': f"创作者粉丝数较前一日下跌 {drop_rate:.1%}（{baseline_followers} -> {current_followers}）",
+                    'drop_rate': drop_rate,
+                    'threshold': follower_threshold,
+                    'timestamp': datetime.now().isoformat()
+                }
+                alerts_triggered.append(alert)
+                save_alert_to_history(alert)
+                send_alert_notification(alert, email=email)
+
+    if baseline_date != today:
+        _save_douyin_alert_snapshot({
+            'date': today,
+            'metrics': {
+                'videos': current_videos,
+                'total_followers': current_followers,
+            }
+        })
+
+    logger.info(f"Douyin alert check completed. Triggered {len(alerts_triggered)} alerts")
+    return {'status': 'success', 'alerts_triggered': len(alerts_triggered)}
+
+
+def check_dian_alerts() -> Dict[str, Any]:
+    """Check Dian (抖店) alert conditions per alert_dian_config.
+
+    - 商品销量较前一日下跌 >= product_sales_drop_threshold
+    - 订单退款率 >= order_refund_rate_threshold（退款/取消订单占比）
+    - 合规违规记录等级 >= compliance_risk_threshold
+
+    enabled=False 时直接跳过——这是"启用抖店告警"开关的生效落点。
+    """
+    config = get_dian_alert_config()
+
+    if not config.get('enabled', True):
+        return {'status': 'skipped', 'reason': 'dian alerts disabled'}
+
+    logger.info("Checking Dian alert conditions...")
+
+    alerts_triggered: List[Dict[str, Any]] = []
+    email = config.get('notification_email')
+
+    # 1) 商品销量较前一日下跌
+    products = cache.get(CACHE_KEYS['products'], [])
+    sales_threshold = float(config.get('product_sales_drop_threshold') or 0)
+    for product in products:
+        sales_today = product.get('sales_today', 0) or 0
+        sales_yesterday = product.get('sales_yesterday', 0) or 0
+        if sales_yesterday > 0 and sales_threshold > 0:
+            drop_rate = (sales_yesterday - sales_today) / sales_yesterday
+            if drop_rate >= sales_threshold:
+                alert = {
+                    'type': 'dian_product_sales_drop',
+                    'product_id': product.get('product_id', ''),
+                    'product_name': product.get('product_name', 'Unknown'),
+                    'message': f"商品 {product.get('product_name', 'Unknown')} 销量较前一日下跌 {drop_rate:.1%}",
+                    'drop_rate': drop_rate,
+                    'threshold': sales_threshold,
+                    'timestamp': datetime.now().isoformat()
+                }
+                alerts_triggered.append(alert)
+                save_alert_to_history(alert)
+                send_alert_notification(alert, email=email)
+
+    # 2) 订单退款率（退款/取消订单占总订单比例）
+    orders = cache.get(CACHE_KEYS['orders'], None)
+    if not isinstance(orders, list):
+        orders = []
+    refund_threshold = float(config.get('order_refund_rate_threshold') or 0)
+    refund_states = ('cancel', 'cancelled', '取消', '已取消', '退款', 'refund')
+    refund_count = sum(1 for o in orders if str(o.get('status', '')).lower() in refund_states)
+    if len(orders) > 0 and refund_threshold > 0:
+        refund_rate = refund_count / len(orders)
+        if refund_rate >= refund_threshold:
+            alert = {
+                'type': 'order_refund_rate',
+                'product_name': '店铺订单',
+                'message': f"订单退款率 {refund_rate:.1%} 超过阈值 {refund_threshold:.1%}（退款/取消 {refund_count}/{len(orders)} 单）",
+                'drop_rate': refund_rate,
+                'threshold': refund_threshold,
+                'timestamp': datetime.now().isoformat()
+            }
+            alerts_triggered.append(alert)
+            save_alert_to_history(alert)
+            send_alert_notification(alert, email=email)
+
+    # 3) 合规风险等级（违规日志 severity 达到阈值的记录）
+    risk_threshold = str(config.get('compliance_risk_threshold') or 'medium').lower()
+    risk_rank = {'low': 1, 'medium': 2, 'high': 3, 'critical': 4}
+    threshold_rank = risk_rank.get(risk_threshold, 2)
+    compliance_logs = cache.get(CACHE_KEYS['compliance_logs'], None)
+    if not isinstance(compliance_logs, list):
+        compliance_logs = []
+    high_risk_logs = [
+        log for log in compliance_logs
+        if risk_rank.get(str(log.get('severity') or log.get('risk_level') or '').lower(), 0) >= threshold_rank
+    ]
+    if high_risk_logs:
+        alert = {
+            'type': 'dian_compliance_risk',
+            'product_name': '商品合规',
+            'message': f"检测到 {len(high_risk_logs)} 条达到「{risk_threshold}」及以上等级的合规违规记录",
+            'count': len(high_risk_logs),
+            'threshold': risk_threshold,
+            'timestamp': datetime.now().isoformat()
+        }
+        alerts_triggered.append(alert)
+        save_alert_to_history(alert)
+        send_alert_notification(alert, email=email)
+
+    logger.info(f"Dian alert check completed. Triggered {len(alerts_triggered)} alerts")
+    return {'status': 'success', 'alerts_triggered': len(alerts_triggered)}
+
+
+def _run_alert_group(runner) -> Dict[str, Any]:
+    """Run one alert group check, isolating failures from external data issues."""
+    try:
+        return runner()
+    except Exception as e:
+        logger.error(f"Alert group check failed: {e}", exc_info=True)
+        return {'status': 'error', 'alerts_triggered': 0, 'reason': str(e)}
+
+
+def check_alerts() -> Dict[str, Any]:
+    """Check all alert groups and send notifications if needed.
+
+    三组告警相互独立，各自受自己的 enabled 开关控制：
+    - 通用告警（alert_config）：商品销量/库存/转化率
+    - 抖音告警（alert_douyin_config）：视频播放/点赞、创作者粉丝（较前一日）
+    - 抖店告警（alert_dian_config）：商品销量、订单退款率、合规风险
+
+    返回结构兼容既有消费方（手动同步/定时任务/仪表盘）：status + alerts_triggered（三组合计）。
+    """
+    groups = {
+        'general': _run_alert_group(_check_general_alerts),
+        'douyin': _run_alert_group(check_douyin_alerts),
+        'dian': _run_alert_group(check_dian_alerts),
+    }
+
+    total = sum(g.get('alerts_triggered', 0) for g in groups.values() if isinstance(g, dict))
+    statuses = [g.get('status') for g in groups.values() if isinstance(g, dict)]
+
+    if 'error' in statuses:
+        status = 'error'
+    elif all(s == 'skipped' for s in statuses):
+        status = 'skipped'
+    else:
+        status = 'success'
+
+    result: Dict[str, Any] = {
+        'status': status,
+        'alerts_triggered': total,
+        'groups': groups,
+    }
+    if status == 'skipped':
+        result['reason'] = 'all alert groups disabled'
+    return result
+
+
+def send_alert_notification(alert: Dict[str, Any], email: Optional[str] = None) -> None:
+    """Send alert notification via WeChat Work webhook and email.
+
+    email 为空时回退到通用告警配置的通知邮箱。
+    """
     from utils.notifications import send_alert_notification as _send
 
-    alert_config = get_alert_config()
-    email = alert_config.get('notification_email')
+    if email is None:
+        email = get_alert_config().get('notification_email')
 
     try:
         _send(alert, email=email)
@@ -1396,84 +2006,48 @@ def clear_alert_history() -> int:
 
 def init_compliance_data() -> None:
     """Initialize compliance data from JSON files (force reload at startup).
-    
-    启动时强制从 JSON 文件加载合规数据，确保跨容器重启始终使用最新规则和日志。
-    仅当文件不存在或为空时，才回退到创建最小默认数据。
+
+    启动时强制从 DATA_DIR 下的 JSON 文件加载合规数据（与运行期写入路径一致），
+    确保跨容器重启始终使用最新规则和日志。
     """
-    from pathlib import Path
-    import json
     from services.fetcher import cache, CACHE_KEYS, COMPLIANCE_RULES_FILE, COMPLIANCE_FILE
     from models import validate_data
-    
+
     # ✅ 方案1：启动时强制从 JSON 文件加载规则（优先级最高）
-    rules_file = Path(__file__).parent.parent / 'data' / 'compliance_rules.json'
-    if rules_file.exists():
+    if COMPLIANCE_RULES_FILE.exists():
         try:
-            with open(rules_file, 'r', encoding='utf-8') as f:
+            with open(COMPLIANCE_RULES_FILE, 'r', encoding='utf-8') as f:
                 loaded_rules = json.load(f)
             if isinstance(loaded_rules, list) and len(loaded_rules) > 0:
                 logger.info(f"Loaded {len(loaded_rules)} compliance rules from file (init_compliance_data)")
                 validated_rules = validate_data(loaded_rules, 'compliance_rules')
                 cache.set(CACHE_KEYS['compliance_rules'], validated_rules)
                 # 持久化到文件（确保最新状态）
-                try:
-                    with open(rules_file, 'w', encoding='utf-8') as f:
-                        json.dump(validated_rules, f, ensure_ascii=False, indent=2)
-                except Exception:
-                    pass
+                save_json_file(COMPLIANCE_RULES_FILE, validated_rules)
             else:
                 logger.warning("compliance_rules.json is empty")
         except Exception as e:
             logger.warning(f"Failed to load compliance rules from file: {e}")
-    
-    # ✅ 回退：检查缓存是否有规则（当文件不存在或为空时）
-    existing_rules = cache.get(CACHE_KEYS['compliance_rules'], None)
-    if existing_rules is not None and len(existing_rules) > 0:
-        logger.info(f"Using {len(existing_rules)} compliance rules from cache")
-    else:
-        # 缓存中无规则，但文件可能已存在且非空（上一步可能已处理）
-        logger.info("No compliance rules in cache, using minimal fallback")
-    
+
     # Initialize compliance logs from JSON file
-    logs_file = Path(__file__).parent.parent / 'data' / 'compliance.json'
-    if logs_file.exists():
+    if COMPLIANCE_FILE.exists():
         try:
-            with open(logs_file, 'r', encoding='utf-8') as f:
+            with open(COMPLIANCE_FILE, 'r', encoding='utf-8') as f:
                 loaded_logs = json.load(f)
             if isinstance(loaded_logs, list) and len(loaded_logs) > 0:
                 logger.info(f"Loaded {len(loaded_logs)} compliance logs from file")
-                # 验证并存入缓存
-                try:
-                    validated_logs = validate_data(loaded_logs, 'compliance_logs')
-                    cache.set(CACHE_KEYS['compliance_logs'], validated_logs)
-                except Exception:
-                    cache.set(CACHE_KEYS['compliance_logs'], loaded_logs)
-                # 持久化
-                try:
-                    with open(logs_file, 'w', encoding='utf-8') as f:
-                        json.dump(validated_logs, f, ensure_ascii=False, indent=2)
-                except Exception:
-                    pass
+                cache.set(CACHE_KEYS['compliance_logs'], loaded_logs)
             else:
-                logger.warning("compliance.json is empty, using fallback")
+                logger.warning("compliance.json is empty, starting with empty logs")
         except Exception as e:
             logger.warning(f"Failed to load compliance logs from file: {e}")
-    
-    # 最后回退：如果缓存中仍无日志，创建 1 条基础日志记录
+
+    # 无日志时保持空列表：不再创建 pass 状态的噪声记录，
+    # 确保违规列表只呈现真实违规/告警记录
     existing_logs = cache.get(CACHE_KEYS['compliance_logs'], [])
-    if not existing_logs or len(existing_logs) == 0:
-        default_log = {
-            'id': 'log_base',
-            'rule_id': 'rule_base',
-            'target_type': 'product',
-            'target_id': '',
-            'target_name': '',
-            'status': 'pass',
-            'details': {'matched_keywords': [], 'checked_fields': []},
-            'checked_at': datetime.now().isoformat()
-        }
-        cache.set(CACHE_KEYS['compliance_logs'], [default_log])
-        logger.info("Created 1 default compliance log (fallback)")
+    if not isinstance(existing_logs, list) or len(existing_logs) == 0:
+        cache.set(CACHE_KEYS['compliance_logs'], [])
+        logger.info("No compliance logs found, starting with empty list")
 
 
 def load_all_data() -> None:
@@ -1523,6 +2097,7 @@ def save_all_data() -> None:
     save_json_file(VIDEOS_FILE, cache.get(CACHE_KEYS['videos'], []))
     save_json_file(ACCOUNTS_FILE, cache.get(CACHE_KEYS['accounts'], []))
     save_json_file(COMPLIANCE_RULES_FILE, cache.get(CACHE_KEYS['compliance_rules'], []))
+    save_json_file(COMPLIANCE_FILE, cache.get(CACHE_KEYS['compliance_logs'], []))
     save_json_file(MEDIA_FILE, cache.get(CACHE_KEYS['media'], []))
     save_json_file(AUTH_FILE, cache.get(CACHE_KEYS['auth'], []))
     save_json_file(CREATOR_WORKS_FILE, cache.get(CACHE_KEYS['creator_works'], []))

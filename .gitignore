@@ -49,6 +49,7 @@ test_*.py
 check_*.py
 debug_*.py
 *.sh
+!scripts/deploy.sh
 fix_*.py
 *.ps1
 tmp/
@@ -58,6 +59,7 @@ build_output.txt
 Dockerfile.*
 *.b64
 *.conf
+!src/frontend/nginx.conf
 
 # Documentation drafts
 DECISIONS.md

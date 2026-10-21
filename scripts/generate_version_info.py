@@ -2,6 +2,16 @@
 """
 生成版本信息文件，供 Docker 构建时复制使用。
 在宿主机运行（有 .git 目录），输出到 src/backend/data/ 目录。
+
+注意：app 容器存在 ./data:/data bind mount，会遮蔽镜像内 /data/version_info.json，
+因此部署流程（scripts/deploy.sh 或 CI deploy job）必须再以服务器 data 目录为
+输出目录运行一次，刷新 bind mount 下的副本。
+
+用法:
+    python generate_version_info.py [输出目录]
+
+省略输出目录时默认写到 src/backend/data/（构建上下文副本）；
+传入 /opt/douyin-platform/data 可直接刷新服务器 bind mount 副本。
 """
 import json
 import subprocess
@@ -88,8 +98,11 @@ def main():
     script_dir = Path(__file__).resolve().parent
     repo_root = script_dir.parent  # scripts/ 的父目录
     
-    # 输出目录：src/backend/data/
-    output_dir = repo_root / "src" / "backend" / "data"
+    # 输出目录：命令行为服务器 data 目录；默认 src/backend/data/（构建上下文副本）
+    if len(sys.argv) > 1:
+        output_dir = Path(sys.argv[1]).resolve()
+    else:
+        output_dir = repo_root / "src" / "backend" / "data"
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # 生成 version_info.json

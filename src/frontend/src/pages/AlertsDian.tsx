@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Card,
   Form,
@@ -33,15 +33,27 @@ const AlertsDian = () => {
     retry: 2,
   });
 
+  // 数据加载完成后，同步到 Form，避免刷新后回到默认值
+  useEffect(() => {
+    if (data) {
+      form.setFieldsValue(data);
+    }
+  }, [data, form]);
+
   const updateConfigMutation = useMutation({
     mutationFn: (alertConfig: AlertConfig) => alertDianApi.updateConfig(alertConfig) as Promise<AlertConfig | undefined>,
-    onSuccess: () => {
+    onSuccess: (res) => {
       message.success('抖店告警配置保存成功');
       setSaved(true);
+      if (res) {
+        form.setFieldsValue(res);
+      }
       queryClient.invalidateQueries({ queryKey: ['alerts', 'dian', 'config'] });
     },
     onError: (err) => {
-      message.error('保存失败: ' + (err as Error).message)
+      message.error('保存失败: ' + (err as Error).message);
+      // 保存失败时重新拉取服务端配置，使开关回滚为服务端真实值
+      queryClient.invalidateQueries({ queryKey: ['alerts', 'dian', 'config'] });
     },
     onSettled: () => {
       setSaving(false);
@@ -64,8 +76,10 @@ const AlertsDian = () => {
     updateConfigMutation.mutate(values);
   };
 
+  // 启用开关即时保存：切换即提交，失败时回滚，避免“忘记点保存配置”导致开关看似失效
   const handleEnabledChange = (enabled: boolean) => {
     form.setFieldValue('enabled', enabled);
+    updateConfigMutation.mutate({ ...form.getFieldsValue(), enabled } as AlertConfig);
   };
 
   const handleRefetch = () => refetch();

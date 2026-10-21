@@ -27,9 +27,11 @@ services:
       - OAUTH_REDIRECT_URI=https://wlkj-tech.cn/api/v1/auth/callback
       - SCHEDULE_INTERVAL_MINUTES=60
       - API_AUTH_TOKEN=${API_AUTH_TOKEN}
+      # 部署时间戳：由部署脚本 / CI 写入项目根 .env 后 up -d，版本页面"最后部署"读取此值
+      - LAST_DEPLOY_TIME=${LAST_DEPLOY_TIME:-}
       - USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
       - REDIS_HOST=redis
-      - DEBUG=true
+      - DEBUG=false
     ports:
       - "5000:5000"
     depends_on:
@@ -52,6 +54,8 @@ services:
       - redirect_uri
     volumes:
       - ./src/backend:/app
+      # 数据目录持久化到宿主，避免容器 recreate 时丢失规则与业务数据
+      - ./data:/data
     networks:
       - douyin-network
 
