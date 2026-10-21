@@ -1556,11 +1556,12 @@ def _init_default_compliance_rules() -> Dict[str, Any]:
 # This can be triggered manually via API or scheduled task
 
 def get_alert_config() -> Dict[str, Any]:
-    """Get current alert configuration from Redis cache."""
-    config = cache.get(CACHE_KEYS['alert_config'])
-    if config is None:
-        return DEFAULT_ALERT_CONFIG
-    return config
+    """Get current alert configuration.
+
+    统一走 get_config：缓存未命中时回退到持久化文件而不是默认配置，
+    避免 Redis key 过期/重启后 enabled=True 默认值把开关“自动启用”。
+    """
+    return get_config('alert_config')
 
 
 def _check_general_alerts() -> Dict[str, Any]:
@@ -1640,19 +1641,13 @@ def _check_general_alerts() -> Dict[str, Any]:
 
 
 def get_douyin_alert_config() -> Dict[str, Any]:
-    """Get current douyin alert configuration from Redis cache."""
-    config = cache.get(CACHE_KEYS['alert_douyin_config'])
-    if config is None:
-        return DEFAULT_ALERT_DOUYIN_CONFIG.copy()
-    return config
+    """Get current douyin alert configuration (cache -> persisted file -> default)."""
+    return get_config('alert_douyin_config')
 
 
 def get_dian_alert_config() -> Dict[str, Any]:
-    """Get current dian alert configuration from Redis cache."""
-    config = cache.get(CACHE_KEYS['alert_dian_config'])
-    if config is None:
-        return DEFAULT_ALERT_DIAN_CONFIG.copy()
-    return config
+    """Get current dian alert configuration (cache -> persisted file -> default)."""
+    return get_config('alert_dian_config')
 
 
 def _load_douyin_alert_snapshot() -> Dict[str, Any]:
@@ -2083,7 +2078,9 @@ def load_all_data() -> None:
     
     for key, (file_path, default) in config_map.items():
         data = load_json_file(file_path, default, model_type=key)
-        cache.set(CACHE_KEYS[key], data)
+        # 配置类键持久化写入（无 TTL）：带 TTL 会在过期后回退到默认配置，
+        # 导致用户关闭的告警开关“自动重新启用”
+        cache.set(CACHE_KEYS[key], data, ttl=None)
     
     cache.set('last_update', datetime.now().isoformat())
     
@@ -2562,16 +2559,36 @@ _CONFIG_FILES: Dict[str, Path] = {
 
 
 def get_config(key: str) -> Dict[str, Any]:
-    """从 Redis 缓存获取配置，缺失时返回对应的默认配置。"""
-    value = cache.get(CACHE_KEYS.get(key, key))
-    if value is None:
-        return _CONFIG_DEFAULTS.get(key, {}).copy()
-    return value
+    """从 Redis 缓存获取配置。
+
+    缓存未命中时（Redis 重启丢数据 / key 曾被 TTL 过期）不再直接回退到
+    默认配置——那会把 enabled=True 的默认值覆盖用户关闭的告警开关，造成
+    “开关自动启用”。改为回退到持久化 JSON 文件（存在的权威值），
+    读取成功后按无 TTL 回填缓存；文件也不存在时才使用默认配置。
+    """
+    cache_key = CACHE_KEYS.get(key, key)
+    value = cache.get(cache_key)
+    if value is not None:
+        return value
+
+    file_path = _CONFIG_FILES.get(key)
+    if file_path and Path(file_path).exists():
+        data = load_json_file(file_path)
+        if isinstance(data, dict) and data:
+            # 持久化回填（无 TTL），避免再次访问时重复击穿到文件
+            cache.set(cache_key, data, ttl=None)
+            return data
+
+    return _CONFIG_DEFAULTS.get(key, {}).copy()
 
 
 def set_config(key: str, value: Dict[str, Any]) -> None:
-    """保存配置到 Redis 缓存，并持久化到对应的 JSON 文件。"""
-    cache.set(CACHE_KEYS.get(key, key), value)
+    """保存配置到 Redis 缓存，并持久化到对应的 JSON 文件。
+
+    缓存写入不使用 TTL（持久化）：配置类键一旦过期，读取方会回退到
+    enabled=True 的默认值，导致用户关闭的告警开关“自动重新启用”。
+    """
+    cache.set(CACHE_KEYS.get(key, key), value, ttl=None)
     file_path = _CONFIG_FILES.get(key)
     if file_path:
         save_json_file(file_path, value)

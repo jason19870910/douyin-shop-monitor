@@ -198,10 +198,19 @@ class RedisCache:
             logger.error(f"Redis GET error for {name}: {e}")
             raise
     
-    def set(self, name: str, value: Any, ttl: int = DEFAULT_TTL) -> bool:
-        """设置缓存值"""
+    def set(self, name: str, value: Any, ttl: Optional[int] = DEFAULT_TTL) -> bool:
+        """设置缓存值。
+
+        ttl=None 表示持久化（不过期），用于告警配置等必须长期保留的键；
+        传入具体秒数则按 TTL 写入。告警配置若带 TTL，过期后读取方会回退到
+        默认配置（enabled=True），导致用户关闭的告警开关“自动重新启用”。
+        """
         try:
-            self._client.setex(self._key(name), ttl, json.dumps(value, default=str))
+            payload = json.dumps(value, default=str)
+            if ttl is None:
+                self._client.set(self._key(name), payload)
+            else:
+                self._client.setex(self._key(name), ttl, payload)
             return True
         except Exception as e:
             logger.error(f"Redis SET error for {name}: {e}")
