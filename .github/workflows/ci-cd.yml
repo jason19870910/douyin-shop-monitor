@@ -182,6 +182,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # 保留上一提交对象：回滚需要 git archive HEAD~1:src/backend
 
       - name: Download version files
         uses: actions/download-artifact@v4
@@ -224,14 +226,17 @@ jobs:
       # app 容器 bind mount ./src/backend:/app，后端代码必须随部署同步；
       # 用 git archive 只同步 git 跟踪的代码文件，避免覆盖服务器上的
       # 运行时数据（data/*.json 被 gitignore，不会出现在归档中）。
+      # 覆盖前先把当前 src/backend 打成 src_backend_prev.tar，回滚时用于
+      # 恢复宿主机源码（deploy.sh --rollback 的手动路径，服务器无 .git）。
       - name: Sync backend source to server
         run: |
-          # 归档条目相对于 src/backend，直接解包到服务器上的 src/backend
+          # 归档条目相对于 src/backend，直接解包到服务器上的 src/backend；
+          # 先快照旧源码再解包新源码（tar 失败不阻断，首次部署目录为空）
           git archive --format=tar HEAD:src/backend \
             | ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
                 -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
                 $SSH_USER@$SSH_HOST \
-                "mkdir -p ${{ env.DEPLOY_PATH }}/src/backend && tar -x -C ${{ env.DEPLOY_PATH }}/src/backend -f -"
+                "mkdir -p ${{ env.DEPLOY_PATH }}/src/backend && cd ${{ env.DEPLOY_PATH }} && tar -cf src_backend_prev.tar -C src/backend . 2>/dev/null; tar -x -C src/backend -f -"
           # Windows 仓库 git 不记录执行位，归档解包得到 644，重启前补回 +x
           ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
               -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
@@ -267,10 +272,13 @@ jobs:
 
       - name: Health check with auto rollback
         run: |
-          ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
-              -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
-              $SSH_USER@$SSH_HOST 'bash -s' << 'EOF'
-          set -e
+          # 探测失败时执行完整回滚：回退 :prev 镜像 tag + 回退宿主机 src/backend
+          # 源码到上一提交 + 确定性重建容器 + 镜像 ID 断言。
+          # 回退源码的原因：app 容器 bind mount ./src/backend:/app，宿主机源码
+          # 变更即时生效且不随镜像回退，只回滚镜像时新代码引起的故障依旧存在。
+          if ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+                 -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+                 $SSH_USER@$SSH_HOST 'bash -s' << 'PROBE'
           ok=0
           for i in $(seq 1 12); do
             if curl -sf http://127.0.0.1:5000/api/v1/health >/dev/null 2>&1 \
@@ -282,14 +290,81 @@ jobs:
             sleep 5
           done
           if [ "$ok" != "1" ]; then
-            echo "health check failed, rolling back to prev images"
-            docker tag douyin-platform-app:prev douyin-platform-app:latest || true
-            docker tag douyin-platform-frontend:prev douyin-platform-frontend:latest || true
-            cd /opt/douyin-platform
-            docker compose up -d --no-build
             exit 1
           fi
           echo "health checks passed"
+          PROBE
+          then
+            echo "[health-check] all healthy, no rollback needed"
+            exit 0
+          fi
+
+          echo "[rollback] health check failed, starting full rollback"
+          # 1) 回退宿主机 src/backend 源码到上一提交（fetch-depth: 2 保证 HEAD~1 可用）
+          PREV_COMMIT=$(git rev-parse HEAD~1 2>/dev/null || true)
+          if [ -n "$PREV_COMMIT" ]; then
+            echo "[rollback] restoring src/backend from $PREV_COMMIT"
+            git archive --format=tar "$PREV_COMMIT":src/backend \
+              | ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+                  -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+                  $SSH_USER@$SSH_HOST \
+                  "mkdir -p ${{ env.DEPLOY_PATH }}/src/backend && tar -x -C ${{ env.DEPLOY_PATH }}/src/backend -f -"
+            # Windows 仓库 git 不记录执行位，归档解包得到 644，补回 +x
+            ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+                -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+                $SSH_USER@$SSH_HOST \
+                "cd ${{ env.DEPLOY_PATH }} && chmod +x src/backend/entrypoint.sh"
+          else
+            echo "[rollback] no previous commit available, source kept as-is"
+          fi
+          # 2) 回退镜像 tag、确定性重建容器（--force-recreate 防 compose 判定无变化时空转）、
+          #    回滚后断言：运行中的容器镜像必须等于各自 :prev 镜像
+          ROLLBACK_RC=0
+          ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+              $SSH_USER@$SSH_HOST 'bash -s' << 'RB' || ROLLBACK_RC=1
+          cd ${{ env.DEPLOY_PATH }}
+          docker tag douyin-platform-app:prev douyin-platform-app:latest 2>/dev/null || true
+          docker tag douyin-platform-frontend:prev douyin-platform-frontend:latest 2>/dev/null || true
+          docker compose up -d --no-build
+          docker compose up -d --no-build --force-recreate --no-deps frontend
+          APP_IMG=$(docker inspect -f {{.Image}} douyin_app)
+          PREV_APP_IMG=$(docker inspect -f {{.Image}} douyin-platform-app:prev)
+          FE_IMG=$(docker inspect -f {{.Image}} douyin_frontend)
+          PREV_FE_IMG=$(docker inspect -f {{.Image}} douyin-platform-frontend:prev)
+          echo "[rollback] app image=$APP_IMG prev=$PREV_APP_IMG"
+          echo "[rollback] frontend image=$FE_IMG prev=$PREV_FE_IMG"
+          if [ "$APP_IMG" != "$PREV_APP_IMG" ]; then
+            echo "[rollback] assertion FAILED: app container is not running prev image"
+            exit 1
+          fi
+          if [ "$FE_IMG" != "$PREV_FE_IMG" ]; then
+            echo "[rollback] assertion FAILED: frontend container is not running prev image"
+            exit 1
+          fi
+          echo "[rollback] image assertions passed"
+          RB
+          if [ "$ROLLBACK_RC" != "0" ]; then
+            echo "[rollback] rollback FAILED or assertions failed, manual intervention required"
+          else
+            echo "[rollback] rollback completed and verified"
+          fi
+          # 部署失败：无论回滚是否成功，最终都以非零退出让 CI 标红
+          exit 1
+
+      - name: Record deployed image id (for version page)
+        run: |
+          # 部署成功后把当前 app 容器实际镜像 ID 写入宿主机 data/image_info.json，
+          # 供版本页"运行镜像"展示真实镜像。version_info.json 是 bind mount 文件、
+          # 不随镜像回退；回滚后 imageId 与 version 不一致即可识别镜像已回退。
+          ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+              $SSH_USER@$SSH_HOST 'bash -s' << 'EOF'
+          IMAGE_ID=$(docker inspect -f {{.Image}} douyin_app)
+          cat > ${{ env.DEPLOY_PATH }}/data/image_info.json <<JSON
+          {"imageId": "$IMAGE_ID", "recordedAt": "$(date -Iseconds)"}
+          JSON
+          echo "[record-image] $IMAGE_ID"
           EOF
 
   # ==================== 5. 通知 ====================

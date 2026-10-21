@@ -66,6 +66,20 @@ def get_version():
     from config.settings import get_settings
     settings = get_settings()
 
+    # 运行镜像 ID 由 CI 部署成功后写入 /data/image_info.json。
+    # version_info.json 是 bind mount 的宿主机文件、不随镜像回退，仅看它无法分辨
+    # "回滚后跑旧镜像但版本号显示新提交"；imageId 反映真实运行的镜像。
+    image_info = {}
+    image_file = Path('/data/image_info.json')
+    try:
+        if image_file.exists():
+            with open(image_file, 'r', encoding='utf-8') as f:
+                image_info = json.load(f)
+    except Exception:
+        pass
+
+    image_id = image_info.get('imageId') or None
+
     # apiKeyInlined: 前端构建产物中是否已内联 API Key（真实探测 bundle）
     api_key_inlined = _frontend_api_key_inlined()
 
@@ -75,6 +89,9 @@ def get_version():
         'builtAt': built_at,
         'apiKeyInlined': api_key_inlined,
         'environment': 'production' if not getattr(settings, 'DEBUG', False) else 'development',
+        'imageId': image_id,
+        'imageIdShort': image_id.replace('sha256:', '')[:12] if image_id else None,
+        'imageRecordedAt': image_info.get('recordedAt')
     })
 
 

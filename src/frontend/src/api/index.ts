@@ -122,8 +122,17 @@ export interface ComplianceItem {
   id: string;
   status: 'pass' | 'fail' | 'warning' | 'ignored' | 'taken_down' | 'restored';
   target_type?: 'work' | 'product' | 'all';
-  productId?: string;           // ⭐ 新增：产品ID（商品合规专用）
-  product_title?: string;       // ⭐ 新增：产品标题（商品合规专用）
+  // 统一 schema（周期任务与手动检测共用）
+  target_id?: string;           // 目标ID（商品ID / 作品ID）
+  target_name?: string;         // 目标名称（商品标题 / 作品标题）
+  severity?: string;            // 风险等级 LOW/MEDIUM/HIGH/CRITICAL
+  category?: string;            // 分类（商品合规 / 作品合规）
+  matched_content?: unknown;    // 违规命中内容
+  details?: Record<string, unknown>; // 违规明细（规则 violations 列表等）
+  rule_name?: string;
+  checked_at?: string;
+  productId?: string;           // 兼容旧版手动检测记录
+  product_title?: string;       // 兼容旧版手动检测记录
   rule_id?: string;
   ignored_at?: string;
   ignored_by?: string;
@@ -554,6 +563,10 @@ export interface VersionInfo {
   builtAt: string;
   apiKeyInlined: boolean;
   environment: 'development' | 'production';
+  // 运行镜像 ID（部署时写入 data/image_info.json，回滚场景下可与 version 不一致）
+  imageId?: string | null;
+  imageIdShort?: string | null;
+  imageRecordedAt?: string | null;
 }
 
 // 变更记录（/api/v1/changes）

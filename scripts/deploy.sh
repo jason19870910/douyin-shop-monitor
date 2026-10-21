@@ -28,7 +28,23 @@ rollback () {
      && docker image inspect "$PROJECT-frontend:prev" >/dev/null 2>&1; then
     docker tag "$PROJECT-app:prev" "$PROJECT-app:latest"
     docker tag "$PROJECT-frontend:prev" "$PROJECT-frontend:latest"
+    # 恢复宿主机源码快照：app 容器 bind mount ./src/backend，宿主机源码变更即时生效
+    # 且不随镜像回退，不回退则"旧镜像 + 未回退的新代码"组合继续运行、故障依旧存在。
+    # 快照由 CI 的 Sync 步在覆盖源码前创建（src_backend_prev.tar），手动回滚同样有效。
+    if [ -f src_backend_prev.tar ]; then
+      echo "[rollback] 恢复源码快照：src/backend <- src_backend_prev.tar"
+      mkdir -p src/backend
+      if tar -xf src_backend_prev.tar -C src/backend; then
+        echo "[rollback] 源码快照恢复完成"
+      else
+        echo "[rollback] 源码快照恢复失败，继续回滚镜像层"
+      fi
+    else
+      echo "[rollback] 未找到源码快照 src_backend_prev.tar，仅回滚镜像层"
+    fi
     docker compose up -d --no-build
+    # 确定性重建前端：:prev tag 与运行镜像一致时 compose 会判定无变化导致回滚空转
+    docker compose up -d --no-build --force-recreate --no-deps frontend
     sleep 5
     if health_ok; then
       echo "[rollback] 回滚成功"

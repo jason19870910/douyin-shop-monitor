@@ -48,10 +48,10 @@ const VersionControl = () => {
       return { label: '开发版', color: 'default' };
     }
     if (version.startsWith('v') && /^v\d+\.\d+\.\d+/.test(version)) {
-      return { label: 'Release 版本', color: 'success' };
+      return { label: '正式版本', color: 'success' };
     }
     if (version.includes('-') || /^[a-f0-9]{7,}$/.test(version)) {
-      return { label: 'Commit 版本', color: 'warning' };
+      return { label: '提交版本', color: 'warning' };
     }
     return { label: '未知', color: 'default' };
   };
@@ -59,7 +59,7 @@ const VersionControl = () => {
   // 格式化版本显示：语义化版本优先，commit 作为次要
   const formatVersionDisplay = (version: string, commit: string): React.ReactNode => {
     const source = getVersionSource(version);
-    if (source.label === 'Release 版本') {
+    if (source.label === '正式版本') {
       return (
         <>
           <span style={{ fontWeight: 600 }}>{version}</span>
@@ -70,7 +70,7 @@ const VersionControl = () => {
         </>
       );
     }
-    if (source.label === 'Commit 版本') {
+    if (source.label === '提交版本') {
       return (
         <>
           <span style={{ fontFamily: 'monospace', fontWeight: 500 }}>{version}</span>
@@ -99,15 +99,15 @@ const VersionControl = () => {
             <Statistic
               title="版本号"
               value={formatVersionDisplay(versionInfo.version, versionInfo.commit) as any}
-              prefix={<Tag color="info">VERSION</Tag>}
+              prefix={<Tag color="info">版本</Tag>}
               valueStyle={{ fontSize: 20, fontWeight: 600 }}
             />
           </Col>
           <Col xs={24} md={12}>
             <Statistic
-              title="Git Commit"
+              title="代码提交"
               value={versionInfo.commit.substring(0, 12)}
-              prefix={<Tag color="blue">COMMIT</Tag>}
+              prefix={<Tag color="blue">提交</Tag>}
               valueStyle={{ fontFamily: 'monospace', fontSize: 14 }}
             />
           </Col>
@@ -115,7 +115,7 @@ const VersionControl = () => {
             <Statistic
               title="构建时间"
               value={formatDateTime(versionInfo.builtAt)}
-              prefix={<Tag color="purple">BUILT</Tag>}
+              prefix={<Tag color="purple">构建</Tag>}
             />
           </Col>
           <Col xs={24} md={12}>
@@ -136,6 +136,15 @@ const VersionControl = () => {
               <Badge color="success" text="已内联到前端构建" />
             ) : (
               <Badge color="warning" text="运行时从后端获取" />
+            )}
+          </Descriptions.Item>
+          <Descriptions.Item label="运行镜像">
+            {versionInfo.imageIdShort ? (
+              <Tooltip title={`镜像 ID：${versionInfo.imageId}（部署成功后由 CI 写入；回滚后可能与版本号不一致）`}>
+                <Tag color="geekblue" style={{ fontFamily: 'monospace' }}>{versionInfo.imageIdShort}</Tag>
+              </Tooltip>
+            ) : (
+              <Badge color="default" text="未记录" />
             )}
           </Descriptions.Item>
           <Descriptions.Item label="完整 Commit">{versionInfo.commit}</Descriptions.Item>
@@ -170,9 +179,9 @@ const VersionControl = () => {
     if (!deployStatus) return <Empty description="获取部署状态失败" style={{ padding: 24 }} />;
 
     const statusItems = [
-      { label: 'App 容器', healthy: deployStatus.appHealthy },
-      { label: 'Redis 容器', healthy: deployStatus.redisHealthy },
-      { label: 'Frontend 容器', healthy: deployStatus.frontendHealthy },
+      { label: '后端容器', healthy: deployStatus.appHealthy },
+      { label: 'Redis 缓存容器', healthy: deployStatus.redisHealthy },
+      { label: '前端容器', healthy: deployStatus.frontendHealthy },
     ];
 
     return (
@@ -304,7 +313,7 @@ const VersionControl = () => {
               title="API 认证状态"
               value={apiStatus}
               valueStyle={{ fontSize: 16, fontWeight: 500 }}
-              prefix={<Tag color={versionInfo?.apiKeyInlined ? 'success' : 'warning'}>AUTH</Tag>}
+              prefix={<Tag color={versionInfo?.apiKeyInlined ? 'success' : 'warning'}>密钥</Tag>}
             />
           </Card>
         </Col>
@@ -314,7 +323,7 @@ const VersionControl = () => {
               title="当前版本"
               value={formatVersionDisplay(versionInfo?.version || '加载中...', versionInfo?.commit || '') as any}
               valueStyle={{ fontSize: 16, fontWeight: 500, fontFamily: 'monospace' }}
-              prefix={<Tag color="info">VER</Tag>}
+              prefix={<Tag color="info">版本</Tag>}
             />
           </Card>
         </Col>
@@ -324,7 +333,7 @@ const VersionControl = () => {
               title="服务器时间 (CST)"
               value={serverTime}
               valueStyle={{ fontSize: 14, fontFamily: 'monospace' }}
-              prefix={<Tag color="purple">CST</Tag>}
+              prefix={<Tag color="purple">时区</Tag>}
             />
           </Card>
         </Col>
@@ -362,6 +371,13 @@ const VersionControl = () => {
                 {deployStatus?.lastDeploy ? formatDateTime(deployStatus.lastDeploy) : '从未部署'}
               </Descriptions.Item>
               <Descriptions.Item label="环境">{versionInfo?.environment || '未知'}</Descriptions.Item>
+              <Descriptions.Item label="运行镜像">
+                {versionInfo?.imageIdShort ? (
+                  <Badge status="processing" text={versionInfo.imageIdShort} />
+                ) : (
+                  '未记录'
+                )}
+              </Descriptions.Item>
               <Descriptions.Item label="版本来源">
                 <Tag color={versionSource.color}>{versionSource.label}</Tag>
               </Descriptions.Item>
