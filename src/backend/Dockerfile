@@ -5,7 +5,11 @@ FROM python:3.11-slim AS builder
 WORKDIR /app
 
 # Use faster apt mirrors (Aliyun)
-RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.debian.sources 2>/dev/null || \
+# 注意：python:3.11-slim 基于 Debian trixie，deb822 源文件位于
+# /etc/apt/sources.list.d/debian.sources（旧路径在 trixie 中不存在，
+# sed 曾因路径不匹配静默失效，导致 apt 直连 deb.debian.org 失败）。
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.debian.sources 2>/dev/null || \
     sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
 
 # Install system dependencies (no git needed - version files are pre-generated)
