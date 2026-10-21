@@ -201,29 +201,24 @@ jobs:
           ssh-keygen -y -f ~/.ssh/id_ci > /dev/null
           echo "CI key fingerprint: $(ssh-keygen -lf ~/.ssh/id_ci)"
 
-      # 临时诊断步：把 SSH 连接细节转成 annotations（run 页匿名可读），
-      # 用于定位 deploy job ssh exit 255 的根因。定位后删除。
+      # 临时诊断步 v2：全量输出拼成单条 annotation（唯一 title），
+      # 避免多行 secret mask 和同 title 注解去重丢行。
       - name: Diagnose SSH identity (temporary)
         run: |
           {
-            echo "SSH_HOST=[$SSH_HOST] SSH_USER=[$SSH_USER]"
-            echo "HOME=$HOME"
-            ls -la ~/.ssh/
-            ls -la ~/.ssh/id_ci
-            echo "--- key file head/tail"
-            head -1 ~/.ssh/id_ci; tail -1 ~/.ssh/id_ci
-            wc -lc ~/.ssh/id_ci
-            echo "--- fingerprints"
-            ssh-keygen -lf ~/.ssh/id_ci
+            echo "home=$HOME user_len=${#SSH_USER} host_len=${#SSH_HOST}"
+            stat -c 'key_size=%s bytes perms=%a' ~/.ssh/id_ci
+            head -1 ~/.ssh/id_ci
+            ssh-keygen -lf ~/.ssh/id_ci 2>&1
             ssh-keygen -y -f ~/.ssh/id_ci > /tmp/ci_pub 2>/tmp/ci_err && echo "keygen_parse=OK" || echo "keygen_parse=FAIL $(head -1 /tmp/ci_err)"
-            ssh-keygen -lf /tmp/ci_pub 2>&1 || true
-            echo "--- effective ssh config"
-            ssh -G -i ~/.ssh/id_ci -o IdentitiesOnly=yes $SSH_USER@$SSH_HOST 2>&1 | grep -iE '^(user|hostname|port|identityfile|identitiesonly|batchmode)'
-            echo "--- verbose connect attempt"
+            ssh-keygen -lf /tmp/ci_pub 2>&1
+            ssh -G -i ~/.ssh/id_ci -o IdentitiesOnly=yes $SSH_USER@$SSH_HOST 2>&1 \
+              | grep -iE '^(user|hostname|port|identityfile|identitiesonly) '
             ssh -vvv -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
                 -o ConnectTimeout=15 $SSH_USER@$SSH_HOST 'echo SSH_CONNECT_OK' 2>&1 \
-              | grep -iE 'identity file|offering|load key|bad permission|denied|no more auth|closed|SSH_CONNECT_OK|could not resolve'
-          } 2>&1 | while IFS= read -r line; do echo "::warning title=SSH-DIAG::$line"; done
+              | grep -iE 'identity file|offering|load key|bad permission|denied|no more auth|connection closed|SSH_CONNECT_OK|could not resolve'
+          } > /tmp/diag.txt 2>&1
+          echo "::warning title=SSH-DIAG-2::$(sed ':a;N;$!ba;s/\n/%0A/g' /tmp/diag.txt)"
 
       - name: Add server to known_hosts
         run: |
