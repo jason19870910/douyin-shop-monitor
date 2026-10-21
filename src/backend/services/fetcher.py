@@ -127,8 +127,12 @@ def _metric_value(metric_map: Dict[str, int], key: str) -> int:
 
 # Data storage paths
 DATA_DIR = Path(os.getenv('DATA_DIR', '/data'))
-# Ensure data directory exists
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+# Ensure data directory exists. Non-fatal: sandboxed/CI environments may not
+# allow creating the default /data path; importing this module must not fail.
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except OSError as e:
+    logger.warning(f"Cannot create DATA_DIR {DATA_DIR}: {e}")
 
 PRODUCTS_FILE = DATA_DIR / 'products.json'
 ORDERS_FILE = DATA_DIR / 'orders.json'

@@ -3,6 +3,7 @@
 import pytest
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 # Add backend source directory to path
@@ -23,6 +24,9 @@ os.environ.setdefault('REDIS_RETRY_INTERVAL', '0')
 # Do not start the background sync scheduler thread during tests:
 # it runs a real sync cycle (external API + Redis) at import time.
 os.environ.setdefault('DISABLE_SCHEDULER', 'true')
+
+# Isolate test data storage: never read/write a real /data directory
+os.environ.setdefault('DATA_DIR', tempfile.mkdtemp(prefix='douyin-test-data-'))
 
 
 @pytest.fixture(scope="session")
