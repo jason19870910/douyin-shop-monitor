@@ -9,9 +9,6 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  SERVER_HOST: ${{ secrets.SERVER_HOST }}
-  SERVER_USER: ${{ secrets.SERVER_USER }}
-  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
   DEPLOY_PATH: /opt/douyin-platform
 
 jobs:
@@ -176,6 +173,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [version]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+    env:
+      SSH_HOST: ${{ secrets.SERVER_HOST }}
+      SSH_USER: ${{ secrets.SERVER_USER }}
+      SSH_CMD: ssh -i $HOME/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new
+      SCP_CMD: scp -i $HOME/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -186,22 +188,29 @@ jobs:
           name: version-files
           path: src/backend/data/
 
-      - name: Set up SSH
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Set up SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          # 私钥写入专用文件（不依赖 ssh-agent，agent 身份曾出现不可用）
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_ci
+          chmod 600 ~/.ssh/id_ci
+          # 校验私钥可解析并打印指纹，便于与服务器 authorized_keys 比对
+          ssh-keygen -y -f ~/.ssh/id_ci > /dev/null
+          echo "CI key fingerprint: $(ssh-keygen -lf ~/.ssh/id_ci)"
 
       - name: Add server to known_hosts
         run: |
-          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -T 10 -H $SSH_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Copy deployment files to server
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "mkdir -p ${{ env.DEPLOY_PATH }}/data"
-          scp docker-compose.yml \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ env.DEPLOY_PATH }}/docker-compose.yml
-          scp src/backend/data/version_info.json src/backend/data/changes_info.json \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ env.DEPLOY_PATH }}/data/
+          $SSH_CMD $SSH_USER@$SSH_HOST "mkdir -p ${{ env.DEPLOY_PATH }}/data"
+          $SCP_CMD docker-compose.yml \
+            $SSH_USER@$SSH_HOST:${{ env.DEPLOY_PATH }}/docker-compose.yml
+          $SCP_CMD src/backend/data/version_info.json src/backend/data/changes_info.json \
+            $SSH_USER@$SSH_HOST:${{ env.DEPLOY_PATH }}/data/
           # src/frontend/nginx.conf 被 .gitignore 忽略，不随仓库分发，
           # 保持服务器现有挂载文件即可（改 nginx 配置时需手动同步）。
 
@@ -210,10 +219,11 @@ jobs:
       # 运行时数据（data/*.json 被 gitignore，不会出现在归档中）。
       - name: Sync backend source to server
         run: |
+          # 归档条目相对于 src/backend，直接解包到服务器上的 src/backend
           git archive --format=tar HEAD:src/backend \
-            | ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-              "tar -x --strip-components=1 -C ${{ env.DEPLOY_PATH }} -f -"
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            | $SSH_CMD $SSH_USER@$SSH_HOST \
+              "mkdir -p ${{ env.DEPLOY_PATH }}/src/backend && tar -x -C ${{ env.DEPLOY_PATH }}/src/backend -f -"
+          $SSH_CMD $SSH_USER@$SSH_HOST \
             "cd ${{ env.DEPLOY_PATH }} && docker compose restart app"
 
       - name: Configure server .env (compose interpolation)
@@ -225,21 +235,21 @@ jobs:
           DEPLOY_TIME=$(date -Iseconds)
           # 增量更新：只覆盖这 4 个插值变量，保留服务器 .env 中已有的
           # 抖音/抖店 cookies 等其余配置（整体 cat > 会清空它们）
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "cd ${{ env.DEPLOY_PATH }} && touch .env && set_kv () { grep -q \"^\$1=\" .env && sed -i \"s|^\$1=.*|\$1=\$2|\" .env || echo \"\$1=\$2\" >> .env; }; set_kv ALERT_EMAIL $ALERT_EMAIL; set_kv API_AUTH_TOKEN $API_AUTH_TOKEN; set_kv VITE_API_KEY $VITE_API_KEY; set_kv LAST_DEPLOY_TIME $DEPLOY_TIME; grep -E '^(ALERT_EMAIL|API_AUTH_TOKEN|VITE_API_KEY|LAST_DEPLOY_TIME)=' .env"
+          $SSH_CMD $SSH_USER@$SSH_HOST "cd ${{ env.DEPLOY_PATH }} && touch .env && set_kv () { grep -q \"^\$1=\" .env && sed -i \"s|^\$1=.*|\$1=\$2|\" .env || echo \"\$1=\$2\" >> .env; }; set_kv ALERT_EMAIL \"$ALERT_EMAIL\"; set_kv API_AUTH_TOKEN \"$API_AUTH_TOKEN\"; set_kv VITE_API_KEY \"$VITE_API_KEY\"; set_kv LAST_DEPLOY_TIME \"$DEPLOY_TIME\"; grep -E '^(ALERT_EMAIL|API_AUTH_TOKEN|VITE_API_KEY|LAST_DEPLOY_TIME)=' .env"
 
       - name: Backup current images for rollback
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-            "docker tag douyin_platform-app:latest douyin_platform-app:prev 2>/dev/null || true; docker tag douyin_platform-frontend:latest douyin_platform-frontend:prev 2>/dev/null || true"
+          $SSH_CMD $SSH_USER@$SSH_HOST \
+            "docker tag douyin-platform-app:latest douyin-platform-app:prev 2>/dev/null || true; docker tag douyin-platform-frontend:latest douyin-platform-frontend:prev 2>/dev/null || true"
 
       - name: Build and deploy on server
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+          $SSH_CMD $SSH_USER@$SSH_HOST \
             "cd ${{ env.DEPLOY_PATH }} && docker compose build app frontend && docker compose up -d && docker compose ps"
 
       - name: Health check with auto rollback
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} 'bash -s' << 'EOF'
+          $SSH_CMD $SSH_USER@$SSH_HOST 'bash -s' << 'EOF'
           set -e
           ok=0
           for i in $(seq 1 12); do
@@ -253,8 +263,8 @@ jobs:
           done
           if [ "$ok" != "1" ]; then
             echo "health check failed, rolling back to prev images"
-            docker tag douyin_platform-app:prev douyin_platform-app:latest || true
-            docker tag douyin_platform-frontend:prev douyin_platform-frontend:latest || true
+            docker tag douyin-platform-app:prev douyin-platform-app:latest || true
+            docker tag douyin-platform-frontend:prev douyin-platform-frontend:latest || true
             cd /opt/douyin-platform
             docker compose up -d --no-build
             exit 1
