@@ -14,6 +14,16 @@ sys.path.insert(0, str(backend_dir))
 os.environ['DEBUG'] = 'true'
 os.environ['API_KEY'] = 'test_api_key_for_testing'
 
+# Test/CI environments have no Redis service: fail fast and fall back to
+# fakeredis instead of the production 30x2s connection-wait loop.
+# setdefault so a developer with a real Redis can still override.
+os.environ.setdefault('REDIS_MAX_RETRIES', '1')
+os.environ.setdefault('REDIS_RETRY_INTERVAL', '0')
+
+# Do not start the background sync scheduler thread during tests:
+# it runs a real sync cycle (external API + Redis) at import time.
+os.environ.setdefault('DISABLE_SCHEDULER', 'true')
+
 
 @pytest.fixture(scope="session")
 def test_config():

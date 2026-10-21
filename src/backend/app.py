@@ -278,9 +278,43 @@ def health_check():
     """Health check endpoint."""
     return health()
 
-load_all_data()
-_init_default_compliance_rules()
-logger.info("Application started with embedded sync scheduler")
+# ==================== Lazy Data Initialization ====================
+
+_data_loaded = False
+_data_load_lock = threading.Lock()
+
+
+def ensure_data_loaded():
+    """Load initial data on first request instead of at import time.
+
+    Import-time ``load_all_data()``/``_init_default_compliance_rules()`` touch
+    Redis through the cache proxy. Without Redis available (e.g. CI runners,
+    test collection) each cache access entered the 30x2s connection-wait loop,
+    making ``import app`` hang or fail collection. Deferring to first request
+    keeps imports side-effect free; failures are logged and retried on the
+    next request instead of breaking startup.
+    """
+    global _data_loaded
+    if _data_loaded:
+        return
+    with _data_load_lock:
+        if _data_loaded:
+            return
+        try:
+            load_all_data()
+            _init_default_compliance_rules()
+            _data_loaded = True
+            logger.info("Application data loaded lazily with embedded sync scheduler")
+        except Exception:
+            logger.warning(
+                "Deferred data load failed (Redis unavailable?); will retry on next request",
+                exc_info=True,
+            )
+
+
+@app.before_request
+def _ensure_data_loaded_on_request():
+    ensure_data_loaded()
 
 
 # ==================== Sync Scheduler ====================
@@ -363,9 +397,11 @@ def _sync_scheduler_loop():
             time.sleep(5)
 
 
-# Start the scheduler thread daemon
-scheduler_thread = threading.Thread(target=_sync_scheduler_loop, daemon=True)
-scheduler_thread.start()
+# Start the scheduler thread daemon (skip in tests/CI: DISABLE_SCHEDULER=true,
+# since _sync_scheduler_loop runs a real sync cycle at import time)
+if os.getenv('DISABLE_SCHEDULER', 'false').lower() != 'true':
+    scheduler_thread = threading.Thread(target=_sync_scheduler_loop, daemon=True)
+    scheduler_thread.start()
 
 
 def create_app() -> Flask:

@@ -45,6 +45,23 @@ def _get_redis_client() -> redis.Redis:
     return redis.Redis(connection_pool=_get_redis_pool())
 
 
+def _get_wait_config() -> Tuple[int, float]:
+    """Redis 连接等待参数（默认生产值：30 次 x 2 秒 ≈ 60 秒）。
+
+    测试/CI 环境可通过 REDIS_MAX_RETRIES / REDIS_RETRY_INTERVAL 加速，
+    让无 Redis 环境快速落入 fakeredis 兜底，避免每个 cache 访问都等满 60 秒。
+    """
+    try:
+        max_retries = int(os.getenv('REDIS_MAX_RETRIES', '30'))
+    except (TypeError, ValueError):
+        max_retries = 30
+    try:
+        retry_interval = float(os.getenv('REDIS_RETRY_INTERVAL', '2.0'))
+    except (TypeError, ValueError):
+        retry_interval = 2.0
+    return max_retries, retry_interval
+
+
 def _wait_for_redis(max_retries: int = 30, retry_interval: float = 2.0) -> redis.Redis:
     """
     等待 Redis 就绪，连接失败尝试使用 fakeredis 作为后备（仅用于开发/测试环境）。
@@ -140,7 +157,8 @@ class RedisCache:
     
     def __init__(self):
         # 强制建立 Redis 连接，失败直接抛出异常
-        self._client = _wait_for_redis(max_retries=30, retry_interval=2.0)
+        max_retries, retry_interval = _get_wait_config()
+        self._client = _wait_for_redis(max_retries=max_retries, retry_interval=retry_interval)
         self._get_or_set_sha = None
         self._lpush_trim_sha = None
         self._hset_sha = None
