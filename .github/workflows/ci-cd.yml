@@ -220,8 +220,10 @@ jobs:
               -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
               src/backend/data/version_info.json src/backend/data/changes_info.json \
               $SSH_USER@$SSH_HOST:${{ env.DEPLOY_PATH }}/data/
-          # src/frontend/nginx.conf 被 .gitignore 忽略，不随仓库分发，
-          # 保持服务器现有挂载文件即可（改 nginx 配置时需手动同步）。
+          # src/frontend/nginx.conf 虽在 .gitignore 白名单中被跟踪，但它是
+          # bind mount 到容器的运行配置且服务器上是调优过的定制版，不随本步
+          # 分发；Sync frontend source 步同步前端代码时同样排除它
+          # （改 nginx 配置时需手动同步）。
 
       # app 容器 bind mount ./src/backend:/app，后端代码必须随部署同步；
       # 用 git archive 只同步 git 跟踪的代码文件，避免覆盖服务器上的
@@ -242,6 +244,21 @@ jobs:
               -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
               $SSH_USER@$SSH_HOST \
               "cd ${{ env.DEPLOY_PATH }} && chmod +x src/backend/entrypoint.sh && docker compose restart app"
+
+      # frontend 的编译产物 dist 烤进镜像（compose 只挂 nginx.conf，不挂 dist），
+      # docker compose build frontend 以服务器 ./src/frontend 为 build context。
+      # deploy job 此前只同步 backend，服务器上的前端源码一直停留在手动同步
+      # 时的版本，前端代码更新永远进不了生产镜像（bundle 不含新代码）。
+      # 用 git archive 同步 git 跟踪的前端源码；nginx.conf 已在上面说明：
+      # 它是 bind mount 运行配置且服务器上是定制版，解包时显式排除，
+      # 避免覆盖线上 nginx 配置。
+      - name: Sync frontend source to server
+        run: |
+          git archive --format=tar HEAD:src/frontend \
+            | ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+                -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+                $SSH_USER@$SSH_HOST \
+                "mkdir -p ${{ env.DEPLOY_PATH }}/src/frontend && tar -x -C ${{ env.DEPLOY_PATH }}/src/frontend --exclude=nginx.conf -f -"
 
       - name: Configure server .env (compose interpolation)
         env:
