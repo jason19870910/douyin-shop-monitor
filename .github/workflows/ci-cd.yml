@@ -176,8 +176,9 @@ jobs:
     env:
       SSH_HOST: ${{ secrets.SERVER_HOST }}
       SSH_USER: ${{ secrets.SERVER_USER }}
-      SSH_CMD: ssh -i $HOME/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new
-      SCP_CMD: scp -i $HOME/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new
+    # 注意：ssh/scp 选项一律在 run 脚本里内联展开。
+    # 不要改成 $SSH_CMD 之类的变量间接引用——bash 不会对变量值里的
+    # $HOME / ~ 做二次展开，ssh 会拿到字面路径导致“零身份认证”失败。
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -206,11 +207,17 @@ jobs:
 
       - name: Copy deployment files to server
         run: |
-          $SSH_CMD $SSH_USER@$SSH_HOST "mkdir -p ${{ env.DEPLOY_PATH }}/data"
-          $SCP_CMD docker-compose.yml \
-            $SSH_USER@$SSH_HOST:${{ env.DEPLOY_PATH }}/docker-compose.yml
-          $SCP_CMD src/backend/data/version_info.json src/backend/data/changes_info.json \
-            $SSH_USER@$SSH_HOST:${{ env.DEPLOY_PATH }}/data/
+          ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+              $SSH_USER@$SSH_HOST "mkdir -p ${{ env.DEPLOY_PATH }}/data"
+          scp -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+              docker-compose.yml \
+              $SSH_USER@$SSH_HOST:${{ env.DEPLOY_PATH }}/docker-compose.yml
+          scp -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+              src/backend/data/version_info.json src/backend/data/changes_info.json \
+              $SSH_USER@$SSH_HOST:${{ env.DEPLOY_PATH }}/data/
           # src/frontend/nginx.conf 被 .gitignore 忽略，不随仓库分发，
           # 保持服务器现有挂载文件即可（改 nginx 配置时需手动同步）。
 
@@ -221,10 +228,14 @@ jobs:
         run: |
           # 归档条目相对于 src/backend，直接解包到服务器上的 src/backend
           git archive --format=tar HEAD:src/backend \
-            | $SSH_CMD $SSH_USER@$SSH_HOST \
-              "mkdir -p ${{ env.DEPLOY_PATH }}/src/backend && tar -x -C ${{ env.DEPLOY_PATH }}/src/backend -f -"
-          $SSH_CMD $SSH_USER@$SSH_HOST \
-            "cd ${{ env.DEPLOY_PATH }} && docker compose restart app"
+            | ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+                -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+                $SSH_USER@$SSH_HOST \
+                "mkdir -p ${{ env.DEPLOY_PATH }}/src/backend && tar -x -C ${{ env.DEPLOY_PATH }}/src/backend -f -"
+          ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+              $SSH_USER@$SSH_HOST \
+              "cd ${{ env.DEPLOY_PATH }} && docker compose restart app"
 
       - name: Configure server .env (compose interpolation)
         env:
@@ -235,21 +246,29 @@ jobs:
           DEPLOY_TIME=$(date -Iseconds)
           # 增量更新：只覆盖这 4 个插值变量，保留服务器 .env 中已有的
           # 抖音/抖店 cookies 等其余配置（整体 cat > 会清空它们）
-          $SSH_CMD $SSH_USER@$SSH_HOST "cd ${{ env.DEPLOY_PATH }} && touch .env && set_kv () { grep -q \"^\$1=\" .env && sed -i \"s|^\$1=.*|\$1=\$2|\" .env || echo \"\$1=\$2\" >> .env; }; set_kv ALERT_EMAIL \"$ALERT_EMAIL\"; set_kv API_AUTH_TOKEN \"$API_AUTH_TOKEN\"; set_kv VITE_API_KEY \"$VITE_API_KEY\"; set_kv LAST_DEPLOY_TIME \"$DEPLOY_TIME\"; grep -E '^(ALERT_EMAIL|API_AUTH_TOKEN|VITE_API_KEY|LAST_DEPLOY_TIME)=' .env"
+          ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+              $SSH_USER@$SSH_HOST "cd ${{ env.DEPLOY_PATH }} && touch .env && set_kv () { grep -q \"^\$1=\" .env && sed -i \"s|^\$1=.*|\$1=\$2|\" .env || echo \"\$1=\$2\" >> .env; }; set_kv ALERT_EMAIL \"$ALERT_EMAIL\"; set_kv API_AUTH_TOKEN \"$API_AUTH_TOKEN\"; set_kv VITE_API_KEY \"$VITE_API_KEY\"; set_kv LAST_DEPLOY_TIME \"$DEPLOY_TIME\"; grep -E '^(ALERT_EMAIL|API_AUTH_TOKEN|VITE_API_KEY|LAST_DEPLOY_TIME)=' .env"
 
       - name: Backup current images for rollback
         run: |
-          $SSH_CMD $SSH_USER@$SSH_HOST \
-            "docker tag douyin-platform-app:latest douyin-platform-app:prev 2>/dev/null || true; docker tag douyin-platform-frontend:latest douyin-platform-frontend:prev 2>/dev/null || true"
+          ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+              $SSH_USER@$SSH_HOST \
+              "docker tag douyin-platform-app:latest douyin-platform-app:prev 2>/dev/null || true; docker tag douyin-platform-frontend:latest douyin-platform-frontend:prev 2>/dev/null || true"
 
       - name: Build and deploy on server
         run: |
-          $SSH_CMD $SSH_USER@$SSH_HOST \
-            "cd ${{ env.DEPLOY_PATH }} && docker compose build app frontend && docker compose up -d && docker compose ps"
+          ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+              $SSH_USER@$SSH_HOST \
+              "cd ${{ env.DEPLOY_PATH }} && docker compose build app frontend && docker compose up -d && docker compose ps"
 
       - name: Health check with auto rollback
         run: |
-          $SSH_CMD $SSH_USER@$SSH_HOST 'bash -s' << 'EOF'
+          ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+              $SSH_USER@$SSH_HOST 'bash -s' << 'EOF'
           set -e
           ok=0
           for i in $(seq 1 12); do
