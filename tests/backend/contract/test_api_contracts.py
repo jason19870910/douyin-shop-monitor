@@ -15,8 +15,29 @@ from utils.responses import (
 )
 
 
+@pytest.fixture
+def app():
+    """Shared Flask app instance for contract tests."""
+    from app import app as flask_app
+    flask_app.config['TESTING'] = True
+    return flask_app
+
+
+@pytest.fixture
+def client(app):
+    """Create test client for Flask app."""
+    with app.test_client() as client:
+        yield client
+
+
 class TestResponseFormatContract:
     """Contract tests for unified API response format."""
+
+    @pytest.fixture(autouse=True)
+    def _push_app_context(self, app):
+        """Response helpers call jsonify, which requires an app context."""
+        with app.app_context():
+            yield
 
     def test_success_response_format(self):
         """Test success response has correct structure."""
@@ -63,7 +84,8 @@ class TestResponseFormatContract:
         data = response.get_json()
         assert data['success'] is False
         assert data['error'] == "Not found"
-        assert data['error_code'] is None
+        # optional fields are omitted entirely when not provided
+        assert 'error_code' not in data
         assert 'details' not in data
 
     def test_not_found_response(self):
@@ -119,24 +141,14 @@ class TestResponseFormatContract:
 
 class TestAPIEndpointContracts:
     """Contract tests for API endpoint response formats."""
-    
-    @pytest.fixture
-    def client(self):
-        """Create test client for Flask app."""
-        from app import app as flask_app
-        flask_app.config['TESTING'] = True
-        with flask_app.test_client() as client:
-            yield client
 
     @patch('blueprints.products.cache')
-    @patch('blueprints.products.get_data_with_fallback')
-    def test_products_list_contract(self, mock_get_data, mock_cache, client):
+    def test_products_list_contract(self, mock_cache, client):
         """Test /api/v1/products returns correct format."""
-        mock_get_data.return_value = (
-            [{'product_id': 'p1', 'product_name': 'Product 1', 'price': 100}],
-            'real'
-        )
-        mock_cache.get.return_value = "2024-01-01T00:00:00"
+        # products blueprint reads cache directly, falling back to the external API
+        mock_cache.get.return_value = [
+            {'product_id': 'p1', 'product_name': 'Product 1', 'price': 100}
+        ]
         
         # Need auth
         response = client.get(
@@ -149,8 +161,7 @@ class TestAPIEndpointContracts:
         assert response.status_code in [200, 401, 403]
 
     @patch('blueprints.products.cache')
-    @patch('blueprints.products.get_data_with_fallback')
-    def test_products_single_contract(self, mock_get_data, mock_cache, client):
+    def test_products_single_contract(self, mock_cache, client):
         """Test /api/v1/products/<id> returns correct format."""
         mock_cache.get.return_value = [
             {'product_id': 'p1', 'product_name': 'Product 1'}
@@ -293,7 +304,7 @@ class TestAPIEndpointContracts:
         # Verify unified response format
         assert data['success'] is True
         assert 'data' in data
-        assert data['data']['status'] == 'ok'
+        assert data['data']['status'] == 'healthy'
 
 
 class TestResponseHeadersContract:

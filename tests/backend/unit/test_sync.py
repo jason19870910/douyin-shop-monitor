@@ -15,11 +15,14 @@ def test_sync_not_in_public_endpoints():
 
 
 def test_sync_history_empty(tmp_path, monkeypatch):
-    monkeypatch.setenv('SKIP_AUTH', 'true')
     monkeypatch.setenv('DATA_DIR', str(tmp_path))
 
-    from app import app
+    import app as app_module
+    # app.SKIP_AUTH is evaluated at import time; monkeypatching the env var
+    # afterwards has no effect, so patch the module attribute directly.
+    monkeypatch.setattr(app_module, 'SKIP_AUTH', True)
 
+    app = app_module.app
     app.config['TESTING'] = True
     with app.test_client() as client:
         resp = client.get('/api/v1/sync/history')

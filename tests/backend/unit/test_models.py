@@ -132,7 +132,7 @@ class TestVideoModel:
             title="Test Video",
             creator_id="c1",
             creator_name="Test Creator",
-            view_count=10000,
+            play_count=10000,  # production field name; view_count is a read-only alias
             like_count=500,
             comment_count=50,
             share_count=10,
