@@ -30,19 +30,25 @@ jobs:
             python -V
             which python pytest
             python -c "import sys; print(sys.executable)"
-            pip show pytest | head -2
           } > ver.log 2>&1
-          pytest -c pytest.ini --collect-only -q > collect.log 2>&1
+          pytest -c pytest.ini --collect-only -q --tb=short > collect.log 2>&1
           echo "COLLECT_EXIT=$?" >> ver.log
-          pytest -c pytest.ini -v --tb=long > run.log 2>&1
+          pytest -c pytest.ini --tb=short > run.log 2>&1
           echo "RUN_EXIT=$?" >> ver.log
-          cat ver.log
-          echo "--- collect.log tail ---"
-          tail -15 collect.log
-          {
-            echo "=== VER ==="; cat ver.log
-            echo "=== COLLECT ==="; head -c 3000 collect.log
-            echo "=== RUN ==="; head -c 3000 run.log
-          } > ann.txt
+          cat ver.log > diag.log
+          echo "=== collect.log ===" >> diag.log
+          cat collect.log >> diag.log
+          tail -c 2200 collect.log > ann.txt
           while IFS= read -r line; do echo "::error::$line"; done < ann.txt
           exit 0
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-diagnostics
+          path: |
+            diag.log
+            collect.log
+            run.log
+          retention-days: 3
