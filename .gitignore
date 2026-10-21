@@ -40,6 +40,7 @@ data/
 *.json
 !package.json
 !package-lock.json
+!src/frontend/tsconfig.json
 !release-please-config.json
 !release-please-manifest.json
 !src/backend/data/compliance_rules.json

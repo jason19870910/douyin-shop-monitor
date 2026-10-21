@@ -201,6 +201,30 @@ jobs:
           ssh-keygen -y -f ~/.ssh/id_ci > /dev/null
           echo "CI key fingerprint: $(ssh-keygen -lf ~/.ssh/id_ci)"
 
+      # 临时诊断步：把 SSH 连接细节转成 annotations（run 页匿名可读），
+      # 用于定位 deploy job ssh exit 255 的根因。定位后删除。
+      - name: Diagnose SSH identity (temporary)
+        run: |
+          {
+            echo "SSH_HOST=[$SSH_HOST] SSH_USER=[$SSH_USER]"
+            echo "HOME=$HOME"
+            ls -la ~/.ssh/
+            ls -la ~/.ssh/id_ci
+            echo "--- key file head/tail"
+            head -1 ~/.ssh/id_ci; tail -1 ~/.ssh/id_ci
+            wc -lc ~/.ssh/id_ci
+            echo "--- fingerprints"
+            ssh-keygen -lf ~/.ssh/id_ci
+            ssh-keygen -y -f ~/.ssh/id_ci > /tmp/ci_pub 2>/tmp/ci_err && echo "keygen_parse=OK" || echo "keygen_parse=FAIL $(head -1 /tmp/ci_err)"
+            ssh-keygen -lf /tmp/ci_pub 2>&1 || true
+            echo "--- effective ssh config"
+            ssh -G -i ~/.ssh/id_ci -o IdentitiesOnly=yes $SSH_USER@$SSH_HOST 2>&1 | grep -iE '^(user|hostname|port|identityfile|identitiesonly|batchmode)'
+            echo "--- verbose connect attempt"
+            ssh -vvv -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
+                -o ConnectTimeout=15 $SSH_USER@$SSH_HOST 'echo SSH_CONNECT_OK' 2>&1 \
+              | grep -iE 'identity file|offering|load key|bad permission|denied|no more auth|closed|SSH_CONNECT_OK|could not resolve'
+          } 2>&1 | while IFS= read -r line; do echo "::warning title=SSH-DIAG::$line"; done
+
       - name: Add server to known_hosts
         run: |
           ssh-keyscan -T 10 -H $SSH_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
