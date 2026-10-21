@@ -251,10 +251,11 @@ jobs:
                 -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
                 $SSH_USER@$SSH_HOST \
                 "mkdir -p ${{ env.DEPLOY_PATH }}/src/backend && tar -x -C ${{ env.DEPLOY_PATH }}/src/backend -f -"
+          # Windows 仓库 git 不记录执行位，归档解包得到 644，重启前补回 +x
           ssh -i ~/.ssh/id_ci -o BatchMode=yes -o IdentitiesOnly=yes \
               -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
               $SSH_USER@$SSH_HOST \
-              "cd ${{ env.DEPLOY_PATH }} && docker compose restart app"
+              "cd ${{ env.DEPLOY_PATH }} && chmod +x src/backend/entrypoint.sh && docker compose restart app"
 
       - name: Configure server .env (compose interpolation)
         env:
