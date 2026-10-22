@@ -1,7 +1,7 @@
 # 安全加固指南
 
-> **版本**: 1.0.0  
-> **更新日期**: 2026-08-18  
+> **版本**: 1.1.0  
+> **更新日期**: 2026-10-16  
 > **适用范围**: 开发、测试、Staging、生产环境  
 > **合规基线**: 等保 2.0 三级、GDPR 最小权限原则、OWASP Top 10
 
@@ -22,8 +22,8 @@
 | 密钥类型 | 示例 | 轮换周期 | 存储位置 | 泄露响应 SLA |
 |---------|------|---------|---------|-------------|
 | **L0 核心根密钥** | CA 根证书、KMS 主密钥 | 1 年 | 硬件安全模块 (HSM) / 云 KMS | 1 小时内 |
-| **L1 服务身份** | JWT 签名密钥、API Gateway 密钥 | 90 天 | 云 Secret Manager / Vault | 4 小时内 |
-| **L2 应用凭证** | 数据库密码、Redis 密码、外部 API Key | 90 天 | `.env` (生产由 Secret Manager 注入) | 4 小时内 |
+| **L1 服务身份** | API 签名密钥 (`a_bogus` 密钥对)、API Gateway 密钥 | 90 天 | 云 Secret Manager / Vault | 4 小时内 |
+| **L2 应用凭证** | Redis 密码、外部 API Key (`API_KEY`) | 90 天 | `.env` (生产由 Secret Manager 注入) | 4 小时内 |
 | **L3 运营凭证** | 抖音 Cookie、动态签名参数 (`a_bogus`、`msToken` 等) | 失效即更新 (通常 2h-7 天) | `.env` + 运维手动维护 | 发现即更新 |
 | **L4 临时/一次性** | CI/CD 部署 Token、调试 Token | 单次/24 小时 | CI 变量 / 临时文件 | 自动失效 |
 
@@ -32,7 +32,7 @@
 # ✅ 正确：生产环境使用 Secret Manager 注入
 # docker-compose.yml
 services:
-  monitor:
+  app:
     environment:
       - FXG_COOKIES=${FXG_COOKIES}  # 由 CI/CD 从 Secret Manager 获取注入
       - CREATOR_COOKIES=${CREATOR_COOKIES}
@@ -48,9 +48,8 @@ services:
 #   - 触发 CI/CD 重新部署 (自动拉取新密钥)
 
 # 2. 撤销旧凭证
-#   - 数据库: ALTER USER ... PASSWORD ...
-#   - Redis: CONFIG SET requirepass ...
-#   - 外部 API: 在上游控制台 Revoke 旧 Token
+#   - 外部 API: 在上游控制台 Revoke 旧 Token/Cookie
+#   - API Key: 轮换 .env 中 API_KEY 并重新部署
 
 # 3. 审计
 #   - 检查近 30 天访问日志: grep "old_key" /var/log/*.log
@@ -110,8 +109,8 @@ add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
         ┌──────────────┼──────────────┐
         ▼              ▼              ▼
    ┌─────────┐   ┌──────────┐   ┌──────────┐
-   │ Flask   │   │ Celery   │   │  Redis   │  ← 内网 VPC，安全组仅允许必要端口
-   │ :5000   │   │ Workers  │   │  :6379   │
+   │ Flask   │   │ 调度器   │   │  Redis   │  ← 内网 VPC，安全组仅允许必要端口
+   │ :5000   │   │ (内置)   │   │  :6379   │
    └─────────┘   └──────────┘   └──────────┘
 ```
 
@@ -149,38 +148,42 @@ server {
 | **CSRF** | 状态改变接口要求 `X-CSRF-Token` 或 SameSite=Strict Cookie |
 
 ### 3.2 认证与授权
+
+系统采用 **双 Header 认证** 机制，所有 `/api/v1/*` 请求（公共端点除外）需同时携带以下两个 Header 中任一有效值：
+
+| Header | 说明 | 示例 |
+|--------|------|------|
+| `Authorization` | Bearer 令牌 | `Authorization: Bearer <API_KEY>` |
+| `X-API-Key` | API 密钥 | `X-API-Key: <API_KEY>` |
+
+两个 Header 传入相同的 API_KEY，任一校验通过即视为认证成功。
+
+**公共端点（无需认证）**：
+- `/api/v1/health` - 基础健康检查
+- `/api/v1/health/external` - 外部 API 健康检查
+- `/api/v1/auth/login` - OAuth 登录
+- `/api/v1/auth/callback` - OAuth 回调
+- `/api/v1/auth/qr-code` - 二维码登录
+- `/api/v1/auth/status` - 登录状态查询
+
+**中间件实现**（`src/backend/app.py` `check_auth`）：
 ```python
-# 示例：基于 JWT 的 API 认证中间件
-from functools import wraps
-from flask import request, jsonify
-import jwt
-
-def require_auth(roles=None):
-    def decorator(f):
-        @wraps(f)
-        def wrapped(*args, **kwargs):
-            auth_header = request.headers.get('Authorization', '')
-            if not auth_header.startswith('Bearer '):
-                return jsonify(error='Missing token'), 401
-            token = auth_header.split(' ')[1]
-            try:
-                payload = jwt.decode(token, Config.JWT_SECRET, algorithms=['HS256'])
-                if roles and payload.get('role') not in roles:
-                    return jsonify(error='Forbidden'), 403
-                request.user = payload
-            except jwt.ExpiredSignatureError:
-                return jsonify(error='Token expired'), 401
-            except jwt.InvalidTokenError:
-                return jsonify(error='Invalid token'), 401
-            return f(*args, **kwargs)
-        return wrapped
-    return decorator
-
-# 使用
-@app.route('/api/admin/stats')
-@require_auth(roles=['admin'])
-def admin_stats():
-    ...
+@app.before_request
+def check_auth():
+    if SKIP_AUTH:
+        return
+    if request.method == 'OPTIONS':
+        return
+    if request.path in PUBLIC_ENDPOINTS:
+        return
+    if request.path.startswith('/api/v1/'):
+        auth_header = request.headers.get('Authorization', '')
+        api_key_header = request.headers.get('X-API-Key', '')
+        api_key = (Config.API_KEY or '').strip()
+        bearer_valid = auth_header.startswith('Bearer ') and auth_header[7:] == api_key
+        api_key_valid = api_key_header == api_key and api_key != ''
+        if not (bearer_valid or api_key_valid):
+            return unauthorized_response('Missing or invalid Authorization header or X-API-Key')
 ```
 
 ### 3.3 敏感数据保护
@@ -250,7 +253,7 @@ trivy image yourdockerhubuser/douyin_monitor:latest
 ```yaml
 # docker-compose.yml 安全选项
 services:
-  monitor:
+  app:
     security_opt:
       - no-new-privileges:true
     read_only: true  # 根文件系统只读
@@ -272,7 +275,7 @@ services:
 #   priority: WARNING
 
 # 文件完整性监控 (AIDE/Tripwire)
-# 每日对比 /opt/douyin-platform/apps/monitor 关键文件哈希
+# 每日对比 /app/src/backend 关键文件哈希
 ```
 
 ### 5.3 审计日志
@@ -295,10 +298,9 @@ def audit_log(event: str, user: str, resource: str, action: str, result: str, **
         **extra
     }))
 
-# 使用示例
-@require_auth()
+# 使用示例 (认证由 check_auth 中间件统一处理，端点内直接记录审计)
 def delete_product(product_id):
-    audit_log('product_delete', request.user['sub'], f'product:{product_id}', 'DELETE', 'success')
+    audit_log('product_delete', request.headers.get('X-API-Key', ''), f'product:{product_id}', 'DELETE', 'success')
     ...
 ```
 
@@ -347,7 +349,7 @@ def delete_product(product_id):
 ### 7.1 等保 2.0 三级关键控制点映射
 | 控制点 | 实施状态 | 证据 |
 |--------|---------|------|
-| 身份鉴别 (强密码、MFA、锁定) | ✅ | JWT + 密码策略 + 失败锁定 |
+| 身份鉴别 (强密码、MFA、锁定) | ✅ | API Key 认证 + 双 Header 校验 |
 | 访问控制 (最小权限、RBAC) | ✅ | 基于角色的接口授权 |
 | 安全审计 (全量日志、防篡改) | ✅ | 结构化日志 + Loki 集中存储 |
 | 入侵防范 (WAF、速率限制、异常检测) | ✅ | Nginx + Falco + 速率限制 |
@@ -361,7 +363,7 @@ def delete_product(product_id):
 | 访问日志 (Nginx) | 1 年 | Loki + 对象存储归档 |
 | 应用审计日志 | 3 年 | Loki + 合规存储桶 (WORM) |
 | 安全事件日志 | 永久 | 专用 SIEM / 归档桶 |
-| 数据库审计 | 3 年 | 云数据库审计日志 |
+| 调度器同步日志 | 3 年 | Loki + 合规存储桶 (WORM) |
 
 ---
 
@@ -386,6 +388,7 @@ def delete_product(product_id):
 
 | 版本 | 日期 | 变更内容 | 作者 |
 |------|------|----------|------|
+| 1.1.0 | 2026-10-16 | 同步架构变更：认证改为双 Header (Authorization + X-API-Key)，移除 JWT/MySQL 引用，更新服务名为 app | - |
 | 1.0.0 | 2026-08-18 | 初始版本：密钥管理、网络传输、应用层、依赖供应链、运行时、漏洞管理、合规审计 | Auto |
 
 ---

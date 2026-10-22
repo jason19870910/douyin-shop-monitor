@@ -1,8 +1,8 @@
 ---
 title: 监控告警规范
-version: 1.0.0
+version: 1.1.0
 status: Published
-last_updated: 2026-09-26
+last_updated: 2026-10-16
 owner: DevOps Lead
 reviewers: [SRE Lead, Backend Lead, 架构师]
 approvers: [Tech Lead]
@@ -11,6 +11,7 @@ doc_id: DOC-OPS-005
 tags: [运维, 监控, 告警, Prometheus, Grafana, SRE, 可观测性]
 related_docs: [DOC-OPS-001, DOC-OPS-003, DOC-TECH-006]
 changelog: |
+  v1.1.0 (2026-10-16): 同步架构变更 - 移除 Celery/MySQL 引用，改为内置调度器指标，新增外部 API 健康检查告警 - DevOps Lead
   v1.0.0 (2026-09-26): 初版创建 - DevOps Lead
 ---
 
@@ -86,17 +87,16 @@ changelog: |
 |------|--------------|----------------|----------------|
 | **API 网关** | `http_requests_total` | `http_requests_total{status=~"5.."}` | `http_request_duration_seconds` |
 | **业务接口** | `business_request_total` | `business_request_total{status="failed"}` | `business_request_duration_seconds` |
-| **数据库** | `mysql_queries_total` | `mysql_errors_total` | `mysql_query_duration_seconds` |
 | **缓存** | `redis_commands_total` | `redis_keyspace_misses / redis_keyspace_hits` | `redis_command_duration_seconds` |
-| **消息队列** | `celery_tasks_total` | `celery_tasks_failed_total` | `celery_task_duration_seconds` |
+| **内置调度器** | `douyin_sync_cycle_total` | `douyin_sync_cycle_failed_total` | `douyin_sync_cycle_duration_seconds` |
 
 ### 3.4 业务指标 (North Star Metrics)
 | 指标名 | 定义 | 采集来源 | 告警阈值 | 归属团队 |
 |--------|------|---------|---------|---------|
-| `douyin_sync_success_rate` | 同步任务成功率 | Celery 任务结果 | < 99.5% (P1) | 后端 |
-| `douyin_sync_latency_seconds` | 同步任务端到端耗时 | Celery 任务耗时 | P99 > 30min (P1) | 后端 |
+| `douyin_sync_success_rate` | 同步任务成功率 | 内置调度器执行结果 | < 99.5% (P1) | 后端 |
+| `douyin_sync_latency_seconds` | 同步任务端到端耗时 | 内置调度器执行耗时 | P99 > 30min (P1) | 后端 |
 | `douyin_api_availability` | 核心 API 可用性 | Blackbox 探测 | < 99.9% (P0) | 运维 |
-| `douyin_data_freshness_hours` | 数据新鲜度 (最晚同步时间) | MySQL `updated_at` | > 4 小时 (P1) | 后端 |
+| `douyin_data_freshness_hours` | 数据新鲜度 (最晚同步时间) | Redis/文件缓存同步时间戳 | > 4 小时 (P1) | 后端 |
 | `douyin_alert_noise_ratio` | 告警噪音比 (无效告警/总告警) | Alertmanager | > 20% (P2) | 运维 |
 | `douyin_user_active_daily` | 日活用户数 | 业务埋点 | 环比下降 > 30% (P1) | 产品/运营 |
 
@@ -108,8 +108,8 @@ changelog: |
 ```yaml
 # 格式: <严重级>_<组件>_<信号>_<条件>
 # 示例:
-- alert: P0_MySQL_Down                    # 组件不可用
-- alert: P1_MySQL_ReplicationLag_High     # 延迟过高
+- alert: P0_Redis_Down                    # 组件不可用
+- alert: P1_Sync_SuccessRate_Low          # 同步成功率过低
 - alert: P2_Node_CPU_Utilization_High     # 资源使用率高
 - alert: P1_API_ErrorRate_High            # 服务错误率
 - alert: P2_Node_Disk_Space_Low           # 资源即将耗尽
@@ -120,7 +120,7 @@ changelog: |
 labels:
   severity: "critical|warning|info"     # 必填: critical/warning/info
   team: "backend|ops|frontend|platform" # 必填: 负责团队
-  component: "mysql|redis|nginx|api"    # 必填: 组件
+  component: "redis|nginx|api|scheduler"    # 必填: 组件
   environment: "prod|staging|dev"       # 必填: 环境
   runbook: "https://wiki/runbook/xxx"   # 推荐: 对应 Runbook 链接
   owner: "zhangsan"                     # 推荐: 直接负责人
@@ -129,27 +129,27 @@ labels:
 ### 4.3 告警注解规范
 ```yaml
 annotations:
-  summary: "MySQL 主库不可用 (实例: {{ $labels.instance }})"
+  summary: "Redis 实例 {{ $labels.instance }} 不可用"
   description: |
-    **故障详情**: MySQL 主库 {{ $labels.instance }} 连接失败，已持续 {{ $value | humanizeDuration }}。
-    **影响范围**: 所有写入业务、同步任务、依赖主库的只读查询。
+    **故障详情**: Redis 实例 {{ $labels.instance }} 连接失败，已持续 {{ $value | humanizeDuration }}。
+    **影响范围**: 缓存不可用、同步锁失效、分布式锁服务中断。
     **建议动作**:
-    1. 检查实例进程/端口/磁盘/内存
-    2. 执行主从切换 (参考 Runbook: DOC-OPS-001)
-    3. 通知业务方只读降级
-  runbook_url: "https://wiki.douyin.com/runbook/mysql-failover"
-  dashboard_url: "https://grafana.douyin.com/d/mysql-overview"
+    1. 检查 Redis 进程/端口/磁盘/内存
+    2. 执行 Sentinel 故障转移 (参考 Runbook: DOC-OPS-001)
+    3. 通知业务方缓存降级
+  runbook_url: "https://wiki.douyin.com/runbook/redis-failover"
+  dashboard_url: "https://grafana.douyin.com/d/redis-overview"
 ```
 
 ### 4.4 告警抑制与分组
 ```yaml
 # 抑制规则示例
 inhibit_rules:
-# 主库挂了，抑制从库复制延迟告警
+# Redis 挂了，抑制缓存相关衍生告警
 - source_match:
-    alertname: "P0_MySQL_Down"
+    alertname: "P0_Redis_Down"
   target_match:
-    alertname: "P1_MySQL_ReplicationLag_High"
+    alertname: "P1_Redis_Memory_High"
   equal: ["instance", "cluster"]
 
 # 网络不通抑制所有上层应用告警
@@ -251,55 +251,8 @@ groups:
 ```
 
 ### 5.2 数据库层
-```yaml
-- name: mysql
-  interval: 30s
-  rules:
-  # MySQL 存活
-  - alert: P0_MySQL_Down
-    expr: mysql_up == 0
-    for: 30s
-    labels:
-      severity: critical
-      team: ops
-      component: mysql
-    annotations:
-      summary: "MySQL 实例 {{ $labels.instance }} 不可用"
-      runbook_url: "https://wiki.douyin.com/runbook/mysql-failover"
 
-  # 复制延迟
-  - alert: P1_MySQL_ReplicationLag_High
-    expr: mysql_slave_seconds_behind_master > 30
-    for: 5m
-    labels:
-      severity: warning
-      team: ops
-      component: mysql
-    annotations:
-      summary: "MySQL 从库 {{ $labels.instance }} 复制延迟 {{ $value | humanizeDuration }}"
-
-  # 连接数
-  - alert: P2_MySQL_Connections_High
-    expr: (mysql_global_status_threads_connected / mysql_global_variables_max_connections) > 0.8
-    for: 10m
-    labels:
-      severity: warning
-      team: ops
-      component: mysql
-    annotations:
-      summary: "MySQL {{ $labels.instance }} 连接数使用率 {{ $value | humanizePercentage }}"
-
-  # 慢查询
-  - alert: P2_MySQL_Slow_Queries_High
-    expr: rate(mysql_global_status_slow_queries[5m]) > 10
-    for: 5m
-    labels:
-      severity: warning
-      team: backend
-      component: mysql
-    annotations:
-      summary: "MySQL {{ $labels.instance }} 慢查询频率过高: {{ $value }}/s"
-```
+> 当前架构为 3 容器（app + redis + frontend），无独立 MySQL 实例，数据库层告警暂缺。
 
 ### 5.3 Redis 层
 ```yaml
@@ -383,15 +336,15 @@ groups:
   # 业务同步成功率
   - alert: P1_Sync_SuccessRate_Low
     expr: |
-      sum(rate(celery_task_success_total[30m])) by (task_name)
+      sum(rate(douyin_sync_cycle_total[30m])) by (task_name)
       /
-      sum(rate(celery_task_total[30m])) by (task_name)
+      sum(rate(douyin_sync_cycle_total[30m])) by (task_name)
       < 0.995
     for: 10m
     labels:
       severity: warning
       team: backend
-      component: celery
+      component: scheduler
     annotations:
       summary: "同步任务 {{ $labels.task_name }} 成功率 {{ $value | humanizePercentage }}"
 ```
@@ -435,7 +388,6 @@ groups:
 |---------|---------|------|---------|------|
 | 概览/总览 | `Overview -` | `Overview - System` | 30s | 全员/管理层 |
 | 基础设施 | `Infra -` | `Infra - Node Exporter` | 30s | 运维 |
-| 数据库 | `DB -` | `DB - MySQL Overview` | 30s | DBA/运维 |
 | 缓存 | `Cache -` | `Cache - Redis Cluster` | 30s | 运维 |
 | 应用服务 | `App -` | `App - API Gateway` | 30s | 后端/运维 |
 | 业务指标 | `Biz -` | `Biz - Sync Monitoring` | 1m | 产品/后端/运营 |
@@ -566,13 +518,13 @@ span.SetAttributes(
     attribute.Int("http.status_code", 200),
     attribute.String("http.route", "/api/orders"),
     attribute.String("net.peer.ip", "10.0.1.50"),
-    attribute.String("db.system", "mysql"),
+    attribute.String("db.system", "redis"),
     attribute.String("db.name", "douyin"),
-    attribute.String("db.operation", "SELECT"),
-    attribute.String("db.statement", "SELECT * FROM orders WHERE shop_id=?"),
+    attribute.String("db.operation", "GET"),
+    attribute.String("db.statement", "GET orders:shop_id:*"),
     attribute.Int64("db.rows_affected", 150),
-    attribute.String("messaging.system", "celery"),
-    attribute.String("messaging.destination", "sync_queue"),
+    attribute.String("messaging.system", "scheduler"),
+    attribute.String("messaging.destination", "sync_cycle"),
     attribute.String("messaging.operation", "publish"),
     attribute.Int64("messaging.message_size", 1024),
 )
@@ -599,7 +551,7 @@ span.SetAttributes(
 ### 进行中告警
 | 告警 | 级别 | 当前状态 | 已执行动作 | 下一步计划 | 预计解决 |
 |------|------|----------|------------|------------|----------|
-| P1_MySQL_ReplicationLag | Warning | 监控中 | 已检查无长事务 | 观察 30min | 19:00 |
+| P1_Sync_SuccessRate_Low | Warning | 监控中 | 已检查外部 API 响应正常 | 观察 30min | 19:00 |
 
 ### 待办变更
 | 变更单 | 风险 | 窗口 | 状态 | 备注 |
@@ -645,11 +597,11 @@ span.SetAttributes(
 ```yaml
 # tests/rules_test.yml
 groups:
-- name: test_mysql_rules
+- name: test_redis_rules
   interval: 1m
   rules:
-  - alert: Test_MySQL_Down
-    expr: mysql_up == 0
+  - alert: Test_Redis_Down
+    expr: redis_up == 0
     for: 30s
     labels:
       severity: critical
@@ -695,4 +647,3 @@ curl -X POST "https://grafana.douyin.com/api/dashboards/db" \
   -H "Content-Type: application/json" \
   -d @dashboard.json
 ```
-EOF

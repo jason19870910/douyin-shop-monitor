@@ -1,8 +1,8 @@
 ---
 title: 术语表
-version: 1.0.0
+version: 1.1.0
 status: Published
-last_updated: 2026-09-26
+last_updated: 2026-10-16
 owner: PM
 reviewers: [Tech Lead, 业务分析师, 架构师]
 approvers: [PM]
@@ -11,6 +11,7 @@ doc_id: DOC-REF-001
 tags: [参考, 术语表, 词汇表, 定义, 缩略语]
 related_docs: [DOC-REQ-001, DOC-TECH-001, DOC-OPS-001]
 changelog: |
+  v1.1.0 (2026-10-16): 同步架构变更 - 移除 Celery/MySQL/JWT 术语，改为内置调度器/Redis/API Key - PM
   v1.0.0 (2026-09-26): 初版创建 - PM
 ---
 
@@ -24,7 +25,7 @@ changelog: |
 | 抖音创作者中心 | Creator Center | 字节跳动旗下创作者数据平台，提供视频、粉丝、互动数据 API | 同步、创作者 |
 | 店铺 | Shop | 抖店/抖音平台上的商家实体，拥有独立授权凭证 | 全模块 |
 | 授权 | Authorization | 商家通过 OAuth2 授权平台访问其店铺/创作者数据 | 授权、同步 |
-| 同步 | Sync | 定时/手动从外部 API 拉取数据并写入本地数据库的过程 | 同步任务 |
+| 同步 | Sync | 定时/手动从外部 API 拉取数据并写入 Redis/文件缓存的过程 | 同步任务 |
 | 全量同步 | Full Sync | 拉取指定时间范围内的所有数据，覆盖式更新 | 同步任务 |
 | 增量同步 | Incremental Sync | 仅拉取上次同步后新增/变更的数据 | 同步任务 |
 | 回传 | Callback | 外部平台主动推送数据变更通知到平台回调接口 | 同步、Webhook |
@@ -37,7 +38,7 @@ changelog: |
 | 告警 | Alert | 关键指标异常时自动触发的通知机制 | 告警设置 |
 | 通知渠道 | Notification Channel | 告警/通知的发送途径（企业微信/邮件/短信/钉钉） | 告警设置 |
 | 授权凭证 | Credentials | 包含 Cookie、Token、签名参数等访问外部 API 所需的认证信息 | 授权、同步 |
-| 同步任务 | Sync Task | Celery 中执行具体同步逻辑的异步任务单元 | 同步、Celery |
+| 同步任务 | Sync Task | 内置调度器 (schedule + threading) 中执行具体同步逻辑的周期任务单元 | 同步、调度器 |
 
 ---
 
@@ -48,13 +49,12 @@ changelog: |
 | API | Application Programming Interface | 应用程序编程接口，前后端/服务间通信契约 | 全模块 |
 | RESTful | Representational State Transfer | 基于 HTTP 方法的资源导向架构风格 | API 设计 |
 | GraphQL | Graph Query Language | 查询语言，客户端按需获取数据 | API 设计 (可选) |
-| JWT | JSON Web Token | 自包含的令牌格式，用于无状态认证 | 认证授权 |
+| API Key | API Key | 访问平台内部 API 的密钥凭证，通过 Authorization: Bearer / X-API-Key 双 Header 传递 | 认证授权 |
 | OAuth2 | Open Authorization 2.0 | 行业标准授权框架，支持授权码/刷新令牌流程 | 授权 |
 | RBAC | Role-Based Access Control | 基于角色的访问控制模型 | 权限管理 |
 | ABAC | Attribute-Based Access Control | 基于属性的访问控制（更细粒度） | 权限管理 (规划) |
-| Celery | Distributed Task Queue | Python 分布式任务队列，支持异步/定时任务 | 同步、异步任务 |
-| Redis | Remote Dictionary Server | 内存键值存储，用于缓存、会话、队列、限流 | 缓存、队列、限流 |
-| MySQL | Relational Database | 关系型数据库，核心业务数据持久化 | 数据存储 |
+| 内置调度器 | Built-in Scheduler | 基于 schedule 库 + threading 后台线程的定时任务机制，运行于 app 容器内 | 同步、定时任务 |
+| Redis | Remote Dictionary Server | 内存键值存储，用于缓存、分布式锁、限流 | 缓存、锁、限流 |
 | ORM | Object-Relational Mapping | 对象关系映射，代码操作数据库 (SQLAlchemy) | 后端开发 |
 | Nginx | Web Server / Reverse Proxy | 高性能 Web 服务器/反向代理/负载均衡 | 部署、网关 |
 | Docker | Container Platform | 容器化平台，镜像构建/运行/编排 | 部署、CI/CD |
@@ -196,7 +196,7 @@ changelog: |
 | SPU | Standard Product Unit | 标准产品单位 | 业务 |
 | API | Application Programming Interface | 应用程序编程接口 | 技术 |
 | REST | Representational State Transfer | 表述性状态转移 | 技术 |
-| JWT | JSON Web Token | JSON Web 令牌 | 技术 |
+| API Key | API Key | API 访问密钥 | 技术 |
 | OAuth | Open Authorization | 开放授权 | 技术 |
 | RBAC | Role-Based Access Control | 基于角色的访问控制 | 技术 |
 | ABAC | Attribute-Based Access Control | 基于属性的访问控制 | 技术 |

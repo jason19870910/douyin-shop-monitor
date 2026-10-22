@@ -1,8 +1,8 @@
 ---
 title: 常见问题解答 (FAQ)
-version: 1.0.0
+version: 1.1.0
 status: Published
-last_updated: 2026-09-26
+last_updated: 2026-10-16
 owner: PM
 reviewers: [Tech Lead, 运维负责人, 业务分析师]
 approvers: [PM]
@@ -11,6 +11,7 @@ doc_id: DOC-REF-002
 tags: [参考, FAQ, 常见问题, 答疑, 故障自助]
 related_docs: [DOC-REF-003, DOC-OPS-001, DOC-OPS-003, DOC-DEV-001]
 changelog: |
+  v1.1.0 (2026-10-16): 同步架构变更 - 移除 Celery/MySQL/JWT 引用，改为内置调度器 + Redis + API Key 认证 - PM
   v1.0.0 (2026-09-26): 初版创建 - PM
 ---
 
@@ -22,7 +23,7 @@ changelog: |
 3. [数据同步与外部 API](#3-数据同步与外部-api)
 4. [权限与认证](#4-权限与认证)
 5. [性能优化](#5-性能优化)
-5. [监控告警](#6-监控告警)
+6. [监控告警](#6-监控告警)
 7. [常见报错与解决](#7-常见报错与解决)
 8. [发布与版本管理](#8-发布与版本管理)
 
@@ -39,7 +40,7 @@ cd douyin-monitor
 
 # 2. 复制环境变量模板并填写真实值
 cp config/.env.example .env
-# 编辑 .env 填写数据库/Redis/FXG/CREATOR 凭证
+# 编辑 .env 填写 Redis/API_KEY/FXG/Creator/好货 Cookie 凭证
 
 # 3. 启动全栈服务
 docker-compose up -d
@@ -48,12 +49,12 @@ docker-compose up -d
 curl http://localhost/api/health  # 应返回 {"status":"ok"}
 ```
 
-### Q1.2: 首次启动报数据库连接失败怎么办？
+### Q1.2: 首次启动报 Redis 连接失败怎么办？
 **A:** 检查以下几点：
-1. `.env` 中 `DATABASE_URL` 格式正确：`mysql+pymysql://user:pass@host:3306/db?charset=utf8mb4`
-2. MySQL 容器已健康：`docker-compose logs mysql | grep "ready for connections"`
-3. 网络连通：`docker-compose exec backend ping mysql`
-4. 权限正确：数据库用户有 `SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER` 权限
+1. Redis 连接配置正确：`REDIS_HOST=redis`、`REDIS_PORT=6379`（docker-compose 内默认服务名 `redis`）
+2. Redis 容器已健康：`docker-compose ps redis` 状态为 `Up`，`docker-compose logs redis` 无异常
+3. 网络连通：`docker-compose exec app redis-cli -h redis -p 6379 ping` 应返回 `PONG`
+4. 如启用了密码/ACL：确认 `REDIS_PASSWORD` 与 Redis 服务端一致（`redis-cli -a $REDIS_PASSWORD ping`）
 
 ### Q1.3: 前端开发服务器热更新不生效？
 **A:**
@@ -106,21 +107,20 @@ git commit --amend
 **A:** CI 已集成覆盖率检查（`pytest --cov=src --cov-fail-under=80`）。新增代码需：
 - 核心业务逻辑：≥ 80% 覆盖
 - 边界/异常分支：必须有测试用例
-- Mock 外部依赖（数据库/Redis/外部 API）
+- Mock 外部依赖（Redis/外部 API）
 
-### Q2.4: 如何本地调试 Celery 任务？
+### Q2.4: 如何本地调试同步任务（内置调度器）？
 **A:**
 ```bash
-# 方式 1: 同步执行 (阻塞调试)
-celery -A celery_app worker --loglevel=INFO --concurrency=1 -Q sync
+# 方式 1: 查看内置调度器日志 (确认周期触发与执行结果)
+docker-compose logs app | grep -E "sync_cycle|SYNC|scheduler"
 
-# 方式 2: 使用 Flower 监控
-pip install flower
-celery -A celery_app flower --port=5555
-# 浏览器访问 http://localhost:5555
+# 方式 2: 手动触发一次完整同步周期 (阻塞执行，便于断点调试)
+curl -X POST http://localhost/api/v1/sync -H "Authorization: Bearer $API_KEY"
 
-# 方式 3: 同步执行单个任务 (用于调试)
-python -c "from tasks import sync_all_data; sync_all_data.delay().get(timeout=60)"
+# 方式 3: 本地直接执行同步逻辑 (不依赖容器)
+cd src/backend
+python -c "from services.fetcher import scheduled_job; scheduled_job()"
 ```
 
 ---
@@ -129,7 +129,7 @@ python -c "from tasks import sync_all_data; sync_all_data.delay().get(timeout=60
 
 ### Q3.1: FXG API 返回 429 Too Many Requests 怎么办？
 **A:** 平台已内置限流保护：
-- **客户端限流**: Token Bucket 20 QPS/店铺 (见 `tasks/sync_service.py`)
+- **客户端限流**: Token Bucket 20 QPS/店铺 (见 `services/fetcher.py`)
 - **指数退避重试**: 最大 3 次，间隔 1s/2s/4s
 - **熔断器**: 连续 5 次 429 触发熔断 60s
 - **监控告警**: `sync_rate_limit_hits` 指标触发 P1 告警
@@ -142,41 +142,42 @@ python -c "from tasks import sync_all_data; sync_all_data.delay().get(timeout=60
 
 ### Q3.2: 同步任务长时间卡住/超时怎么办？
 **A:** 排查清单：
-- [ ] Celery Worker 存活：`celery -A celery_app inspect ping`
-- [ ] 队列积压：`celery -A celery_app inspect active_queues`
-- [ ] 数据库连接池：`SHOW PROCESSLIST` 是否有大量 `Sleep` 连接
+- [ ] 调度器线程存活：`docker-compose logs app | grep -E "scheduler|sync_cycle"`，应有 `Sync scheduler started` 及周期日志
+- [ ] 同步锁未僵死：`docker-compose exec redis redis-cli GET douyin:monitor:sync:lock`（长时间占用且无进度日志说明上次同步卡住）
 - [ ] 外部 API 响应：`curl -v https://fxg.jinritemai.com/api/health`
-- [ ] Worker 日志：`docker-compose logs celery_worker_sync -f`
+- [ ] app 容器资源：`docker stats app` 看 CPU/内存是否打满
+- [ ] app 日志：`docker-compose logs app -f`
 
 **常见原因:**
-- 外部 API 响应慢 → 调整 `SYNC_TIMEOUT` 环境变量
-- 数据量大 → 分批处理、游标分页、异步分批入库
-- 死锁 → 检查数据库死锁日志，调整事务隔离级别/索引
+- 外部 API 响应慢/限流 → 检查 429 与超时，适当调整 `SCHEDULE_INTERVAL_MINUTES`
+- 数据量大 → 分批处理、游标分页
+- 同步锁未释放 → `docker-compose exec redis redis-cli DEL douyin:monitor:sync:lock` 释放后手动触发同步验证
 
 ### Q3.3: 同步数据不一致/丢单怎么办？
 **A:** 自查步骤：
-1. 对比 FXG 后台订单数 vs 本地订单数
-2. 检查 `sync_tasks` 表最近执行记录（成功/失败/耗时）
-3. 检查 `orders` 表 `updated_at` 最近更新时间
-4. 手动触发增量同步：`celery -A celery_app call tasks.sync_incremental`
+1. 对比 FXG 后台订单数 vs 看板订单数（前端数据来自 Redis/文件缓存）
+2. 查看同步历史：`curl http://localhost/api/v1/sync/history -H "Authorization: Bearer $API_KEY"`，确认最近周期状态与耗时
+3. 检查最近成功周期时间：`docker-compose logs app | grep "Sync cycle completed"`
+4. 手动触发补偿同步：`curl -X POST http://localhost/api/v1/sync -H "Authorization: Bearer $API_KEY"`
 5. 检查 FXG API 返回数据是否包含 `is_deleted` 标记（软删除处理）
 
 ### Q3.4: FXG Cookie 失效/Token 过期如何处理？
-**A:** 平台已实现自动刷新机制：
-- **Access Token**: 有效期 2h，提前 10min 自动刷新（见 `tasks/auth.py`）
-- **Cookie**: 有效期 7-30 天，过期前 24h 告警提醒（`alert_cookie_expiry`）
-- **手动刷新**: 管理后台 → 授权管理 → 点击“刷新 Token”
+**A:** 定时同步依赖各平台站点 Cookie，过期后外部 API 返回未登录/权限错误，同步周期标记失败：
+- **Cookie**: 有效期通常 2h-7 天，需定期通过浏览器 F12（开发者工具）复制更新
+- **同步检测**: 同步过程中检测到 `COOKIE_EXPIRED`/`AUTH_ERROR` 会记录告警日志并标记该周期状态
+- **涉及站点**: 抖店 `fxg.jinritemai.com`、创作者中心 `creator.douyin.com`、指南针 `compass.jinritemai.com`、好货 `haohuo.jinritemai.com`
 
 **应急手动操作:**
 ```bash
-# 1. 获取新 Cookie/Token (浏览器开发者工具复制)
-# 2. 更新 Vault/环境变量
-docker-compose exec backend python -c "
-from tasks.auth import refresh_fxg_token
-refresh_fxg_token(shop_id=123)
-"
-# 3. 重启同步 Worker 生效
-docker-compose restart celery_worker_sync
+# 1. 浏览器登录对应平台，F12 复制新 Cookie
+# 2. 更新 .env 中对应环境变量（FXG_COOKIES / CREATOR_COOKIES / HAOHUO_COOKIES）并重启 app 生效
+docker-compose restart app
+
+# 3. 手动触发一次同步验证
+curl -X POST http://localhost/api/v1/sync -H "Authorization: Bearer $API_KEY"
+
+# 4. 查看认证相关日志
+docker-compose logs app | grep -E "cookie|auth|COOKIE|AUTH"
 ```
 
 ---
@@ -185,31 +186,43 @@ docker-compose restart celery_worker_sync
 
 ### Q4.1: 用户登录后提示“权限不足”？
 **A:** 检查权限矩阵：
-1. 确认用户角色：`SELECT * FROM users WHERE id=xxx;`
-2. 确认店铺授权：`SELECT * FROM shop_authorizations WHERE user_id=xxx AND shop_id=yyy;`
+1. 确认用户角色：按 `docs/reference/PERMISSION.md` 权限矩阵核对目标角色是否具备该操作权限
+2. 确认店铺授权：核对 `.env` 中该用户 API Key 对应的店铺与角色绑定关系
 3. 检查 RBAC 策略：`docs/reference/PERMISSION.md` 权限矩阵
-4. 后端日志搜索：`grep "permission_denied" logs/backend.log`
+4. 后端日志搜索：`grep "permission_denied" logs/app.log`
 
-### Q4.2: JWT Token 过期/刷新失败怎么办？
-**A:**
-- **Access Token**: 30min 过期，前端自动携带 Refresh Token 调用 `/api/auth/refresh`
-- **Refresh Token**: 7天过期，过期需重新登录
-- **常见原因**: 时钟不同步（检查服务器 NTP）、Refresh Token 被撤销/过期、并发刷新导致竞争
+### Q4.2: 调用 API 返回 401 Unauthorized 怎么办？
+**A:** 平台采用 API Key 双 Header 认证，任一通过即可，无登录态/刷新机制：
+- **Authorization**: `Authorization: Bearer <API_KEY>`
+- **X-API-Key**: `X-API-Key: <API_KEY>`
+- **公共端点白名单**（无需认证）: health、health/external、auth/login、auth/callback、auth/qr-code、auth/status
+
+**常见原因**: Header 缺失/拼写错误（`Bearer ` 后需有空格）、`API_KEY` 与服务端环境变量不一致、访问了非白名单端点但未携带凭证。
 
 **调试:**
 ```bash
-# 解码 JWT 查看过期时间
-echo "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." | jq -R 'split(".")[1] | @base64d | fromjson'
+# 1. 带凭证请求对比验证
+curl -i http://localhost/api/v1/products -H "Authorization: Bearer $API_KEY"
+
+# 2. 查看认证失败日志
+docker-compose logs app | grep -E "401|auth"
+
+# 3. 确认服务端已配置 API_KEY（未配置时全部业务端点返回 401）
+docker-compose exec app env | grep API_KEY
+
+# 4. 本地开发可临时设置 SKIP_AUTH=true 跳过认证（仅限开发环境）
 ```
 
 ### Q4.3: 如何临时授予用户临时权限？
-**A:**
-```sql
--- 临时授予店铺管理员权限 (24小时后自动过期)
-INSERT INTO user_permissions (user_id, shop_id, permission, expires_at)
-VALUES (123, 456, 'shop_admin', NOW() + INTERVAL '24 HOUR');
+**A:** 平台无本地用户库，访问控制基于 API Key + RBAC 权限矩阵（`docs/reference/PERMISSION.md`）：
+```bash
+# 1. 核对目标角色当前权限
+grep "shop_admin" docs/reference/PERMISSION.md
 
--- 或通过管理后台：用户管理 → 权限分配 → 设置过期时间
+# 2. 为该用户在 .env 颁发独立 API Key（便于审计与回收）
+#    需与权限矩阵中角色一一对应
+
+# 3. 权限到期后轮换/回收该 API Key 并同步更新权限矩阵
 ```
 
 ---
@@ -219,35 +232,37 @@ VALUES (123, 456, 'shop_admin', NOW() + INTERVAL '24 HOUR');
 ### Q5.1: 接口响应慢 (P99 > 1s) 如何排查？
 **A:** 诊断步骤：
 1. **Grafana 查看**: `http_request_duration_seconds` P99 趋势
-2. **慢查询日志**: `mysqldumpslow -s t /var/log/mysql/slow.log`
-3. **EXPLAIN 分析**: `EXPLAIN ANALYZE SELECT ...` 看是否全表扫描
-4. **索引检查**: `SHOW INDEX FROM orders;` 确认组合索引覆盖
-5. **N+1 排查**: Django Debug Toolbar / SQLAlchemy `echo=True` 看查询数
+2. **性能剖析**: `py-spy top --pid <pid>` 实时看热点函数，`py-spy dump --pid <pid>` 抓取当前调用栈
+3. **外部调用耗时**: 检查 FXG/创作者中心等外部 API 响应时间与重试次数
+4. **缓存命中**: `docker-compose exec redis redis-cli INFO stats` 看 `keyspace_hits/misses`，关注缓存穿透
+5. **容器资源**: `docker stats app` 看 CPU/内存是否受限
 
 **常见优化:**
-- 加组合索引：`CREATE INDEX idx_shop_status_time ON orders(shop_id, status, created_at);`
+- 缓存热点数据：看板统计结果缓存 TTL 60s，减少重复计算
 - 游标分页替代 OFFSET：`WHERE id > last_id ORDER BY id LIMIT 20`
-- 缓存热点数据：`cache:dashboard:stats:{shop_id}` TTL 60s
-- 只查需要字段：`SELECT id, status, amount FROM ...` 避免 `SELECT *`
+- 减少外部调用：合并/批量请求，避免循环内逐个调用外部 API
+- 按需返回字段：接口只返回必要字段，避免全量冗余数据传输
 
-### Q5.2: 数据库 CPU/内存飙高怎么办？
+### Q5.2: app 容器 CPU/内存飙高怎么办？
 **A:** 紧急缓解：
-```sql
--- 1. 杀掉长时间运行查询
-KILL QUERY <thread_id>;
+```bash
+# 1. 定位热点函数/线程
+APP_PID=$(docker inspect -f '{{.State.Pid}}' douyin_app)
+py-spy top --pid $APP_PID
 
--- 2. 临时降低同步并发
--- 修改环境变量 SYNC_CONCURRENCY=2 并重启 Worker
+# 2. 临时拉长同步间隔、降低外部请求并发
+#    修改 .env 中 SCHEDULE_INTERVAL_MINUTES 并重启容器
+docker-compose restart app
 
--- 3. 临时禁用非核心同步任务
-UPDATE sync_tasks SET enabled=0 WHERE task_name IN ('non_core_task');
+# 3. 通过同步周期日志识别异常任务
+docker-compose logs app | grep -E "sync_cycle|SYNC"
 ```
 
 **根因排查:**
-- 慢查询 → 加索引/改写 SQL/分页优化
-- 连接泄漏 → 检查连接池配置 `pool_size`/`max_overflow`/`pool_recycle`
-- 大事务 → 拆分事务、异步补偿、乐观锁
-- 统计信息过期 → `ANALYZE TABLE orders;`
+- 外部 API 响应慢 → 检查 FXG/创作者中心响应时间与重试次数
+- 签名计算密集 → `a_bogus` 的 V8 实时计算 CPU 开销（仅 FXG 域名）
+- 连接异常 → 检查 Redis 连接池复用情况
+- 缓存值过大 → Redis 大 Key 触发序列化/传输开销
 
 ### Q5.3: Redis 内存不足 (OOM) 怎么办？
 **A:** 紧急缓解：
@@ -278,7 +293,7 @@ redis-cli SCAN 0 MATCH "cache:*" COUNT 1000 | xargs redis-cli DEL
 ### Q6.1: 告警风暴（短时间大量告警）如何处理？
 **A:** 紧急处理：
 1. **静默告警**: Alertmanager Web UI → Silences → 新建静默 (匹配告警标签)
-2. **识别根因**: 查看告警共同标签，定位共同根因（如数据库宕机触发所有服务告警）
+2. **识别根因**: 查看告警共同标签，定位共同根因（如 Redis 故障触发所有服务告警）
 3. **分级处理**: 先恢复核心服务，再处理派生告警
 4. **事后优化**: 增加抑制规则、调整阈值、增加分组间隔
 
@@ -318,34 +333,37 @@ groups:
 
 ## 7. 常见报错与解决
 
-### Q7.1: `sqlalchemy.exc.OperationalError: (pymysql.err.OperationalError) (2006, 'MySQL server has gone away')`
-**A:** 原因：连接超时被 MySQL 主动断开。
+### Q7.1: `redis.exceptions.ConnectionError` 连接 Redis 失败/被断开
+**A:** 原因：Redis 服务重启、网络中断或连接空闲超时导致连接断开。
 **解决:**
-```python
-# SQLAlchemy 配置加上连接池预检
-engine = create_async_engine(
-    DATABASE_URL,
-    pool_pre_ping=True,          # 关键：获取连接前先 ping
-    pool_recycle=3600,           # 1小时强制回收 (小于 MySQL wait_timeout)
-    pool_size=20,
-    max_overflow=10,
-)
+```bash
+# 1. 确认 Redis 容器存活与连通
+docker-compose ps redis
+docker-compose exec app redis-cli -h redis -p 6379 ping   # 应返回 PONG
+
+# 2. 查看 Redis 日志，排查重启/OOM 原因
+docker-compose logs redis --tail=100
+
+# 3. 重启 app 容器重新建立连接
+docker-compose restart app
 ```
 
-### Q7.2: `celery.exceptions.OperationalError: Connection refused to Redis`
-**A:** 检查 Redis 连通性：
+### Q7.2: 同步周期失败（日志出现 `Sync cycle failed` 或 `Sync skipped`）
+**A:** 同步由 app 容器内置调度器驱动，先区分"失败"与"被跳过"：
 ```bash
-# 1. Redis 容器状态
-docker-compose ps redis
+# 1. 查看最近同步周期日志（failed / skipped / completed）
+docker-compose logs app | grep -E "Sync cycle|Sync skipped|Sync scheduler"
 
-# 2. 网络连通
-docker-compose exec backend redis-cli -h redis -p 6379 PING
+# 2. 检查同步锁是否僵死（长期占用会导致后续同步被跳过）
+docker-compose exec redis redis-cli GET douyin:monitor:sync:lock
+# 确认无同步进行后释放：
+docker-compose exec redis redis-cli DEL douyin:monitor:sync:lock
 
-# 3. 密码/ACL
-redis-cli -h redis -a $REDIS_PASSWORD PING
+# 3. 检查 Redis 连通性（连接失败时降级文件缓存并记录告警）
+docker-compose exec app redis-cli -h redis -p 6379 PING
 
-# 4. 连接池耗尽
-redis-cli INFO clients | grep connected_clients
+# 4. 检查外部 API / Cookie 是否失效
+docker-compose logs app | grep -E "COOKIE|AUTH|429|timeout" | tail -20
 ```
 
 ### Q7.3: `pydantic.ValidationError: 1 validation error for OrderDTO status Input should be 'pending'|'paid'|...`
@@ -363,9 +381,12 @@ class OrderDTO(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 ```
 
-### Q7.4: `celery.exceptions.TaskRevokedError: Task was revoked`
-**A:** 任务被主动撤销（部署重启/手动撤销/Worker 关闭）。
-**处理:** 幂等设计保证重试安全，监控 `celery_task_revoked_total` 指标。
+### Q7.4: 日志提示 `Sync skipped: another sync already in progress`
+**A:** 本次同步被跳过——分布式锁已被占用（上次同步未完成或锁未释放）。
+**处理:** 同步为幂等设计，跳过不会造成数据错误，但需确认：
+1. 上一次同步周期是否卡住：`docker-compose logs app | grep "Sync cycle"`
+2. 锁是否僵死：`docker-compose exec redis redis-cli GET douyin:monitor:sync:lock`，确认无同步进行后 `DEL` 释放
+3. 同步频率是否过高：调整 `SCHEDULE_INTERVAL_MINUTES`，避免周期重叠
 
 ### Q7.5: `redis.exceptions.ResponseError: OOM command not allowed when used memory > 'maxmemory'`
 **A:** 参见 Q5.3 Redis OOM 处理。
@@ -405,8 +426,8 @@ git push origin develop
 **A:** 快速回滚方案：
 ```bash
 # 方案 1: Docker 镜像回滚 (推荐，秒级)
-docker-compose pull backend:v1.2.0
-docker-compose up -d backend
+docker-compose pull app:v1.2.0
+docker-compose up -d app
 
 # 方案 2: Git 回滚 + 重新部署
 git checkout main
@@ -414,8 +435,8 @@ git revert <bad-commit-hash>  # 或 git reset --hard v1.2.0
 git push origin main --force-with-lease  # 需谨慎
 # 触发 CI/CD 重新部署
 
-# 方案 3: 数据库回滚 (如有迁移)
-./scripts/rollback_migration.sh v1.2.0
+# 方案 3: 数据侧恢复 - 旧版本无数据库迁移，触发全量同步重建缓存
+curl -X POST http://localhost/api/v1/sync -H "Authorization: Bearer $API_KEY"
 ```
 
 ### Q8.3: 如何查看当前生产环境版本？
@@ -463,5 +484,4 @@ git push origin feature/good-first-issue-xxx
 
 ---
 
-*文档版本: v1.0.0 | 维护责任: PM/Tech Lead | 更新周期: 按需补充 | 反馈渠道: GitHub Issues / 企业微信群*
-EOF
+*文档版本: v1.1.0 | 维护责任: PM/Tech Lead | 更新周期: 按需补充 | 反馈渠道: GitHub Issues / 企业微信群*

@@ -1,4 +1,5 @@
 # 系统架构概览 (Architecture Overview)
+**版本**: 1.2.0 | **更新日期**: 2026-10-16
 
 > **📋 相关扩展文档（已归档）：**
 > - [部署架构演进路线图 (K8s/MySQL/Prometheus/Grafana)](./archive/DEPLOYMENT_ARCHITECTURE.md) — 生产级目标架构
@@ -12,7 +13,7 @@
 ```
 +-------------------+        +-------------------+
 |   前端 (React)    | <----> |   后端 (Flask +   |
-+-------------------+        |   sync scheduler) |
++-------------------+        |   内置调度器)     |
         |                                 |
         v                                 v
 +-------------------+
@@ -22,11 +23,30 @@
 
 ## 关键组件
 
-- **Flask**：提供 RESTful API，对内服务（`/api/v1/*`）以及对外转发接口。内置定时同步调度器，周期性执行数据抓取与告警检查。
+- **Flask**：提供 RESTful API，对内服务（`/api/v1/*`）以及对外转发接口。内置定时同步调度器（使用 `schedule` 库 + `threading`），周期性执行数据抓取与告警检查。包含健康检查端点（`/api/v1/health` 和 `/api/v1/health/external`）。
 - **Redis**：共享缓存层，所有服务通过服务名 `redis` 通信；支持原子操作（Lua 脚本）、分布式锁（SET NX EX，5min TTL）、发布/订阅。作为缓存和分布式锁使用，保证多进程场景下的数据一致性。
 - **Config**：统一管理环境变量，包括双域名基础 URL、公共请求头、Cookie、动态签名参数等。
 - **外部 API 调用**：通过 `services.fetcher._request` 函数，使用 `Config.FXG_BASE_URL`、`Config.CREATOR_BASE_URL`、`Config.COMMON_HEADERS`、`Config.FXG_COOKIES`/`Config.CREATOR_COOKIES` 完成安全请求。
 - **告警系统**：`check_alerts` 检测销量、转化率、库存阈值，支持邮件通知（可后续接入企业微信）。
+- **健康检查**：提供两级健康检查 - 基础健康检查（`/api/v1/health`）和外部API健康检查（`/api/v1/health/external`）。
+
+## 安全机制
+
+- **双 Header 认证**：所有内部 API (`/api/v1/*`) 要求同时提供：
+  - `Authorization: Bearer <API_KEY>` 
+  - `X-API-Key: <API_KEY>`
+  - 公共端点白名单：`/api/v1/health`, `/api/v1/health/external`, `/api/v1/auth/*` (登录、回调、二维码、状态查询)
+
+- **签名机制**：
+  - 仅对抖店域名 (`fxg.jinritemai.com`) 的请求进行签名
+  - 使用 py_mini_racer 实时计算 V8 签名算法生成 `a_bogus` 参数
+  - 长效参数显式传递：`__token`, `verifyFp`, `fp` 等Cookie参数需在请求中明确携带
+  - 强时效参数跳过注入：对于 `msToken`, `a_bogus` 等强时效参数，通过 `_request(skip_sign=True)` 跳过自动签名注入，由业务方负责提供最新值
+
+- **分布式锁**：Redis `SET NX EX` 命令实现，5分钟 TTL，保护同步任务防止重复执行
+  - 锁 Key 格式：`douyin:monitor:sync:lock`
+  - 获取锁：`SET lock_key value NX EX 300`
+  - 释放锁：仅当锁值匹配时删除
 
 ## 前端架构
 
@@ -57,11 +77,14 @@
 
 ## 数据流
 
-1. **定时抓取**：内置调度器触发 `scheduled_job_task`，调用 `fetch_and_store_*` 系列函数，从外部 API 拉取商品、订单、创作者数据并写入 Redis 缓存与本地 JSON 文件。
+1. **定时抓取**：内置调度器（background thread 使用 `schedule` 库）触发 `_run_sync_cycle()`，调用 `fetch_and_store_*` 系列函数，从外部 API 拉取商品、订单、创作者数据并写入 Redis 缓存与本地 JSON 文件。
 2. **缓存**：抓取结果保存在 Redis，供所有 API 路由实时读取；支持原子获取或设置（防缓存击穿）、列表/哈希操作、TTL 过期策略。
 3. **告警**：抓取后立即执行 `check_alerts`，如满足阈值则触发 `send_alert_notification`（日志 + 邮件）。
 4. **前端访问**：前端通过 `/api/v1/*` 调用获取商品列表、订单列表、创作者信息、仪表盘统计等。
 5. **外部转发**：`/api/v1/products/stats`、`/api/v1/orders/stats`、`/api/v1/creators/overview` 等路由直接转发请求至对应外部服务，保持查询参数完整。
+6. **健康检查**：提供两级健康检查端点：
+   - `/api/v1/health`：基础健康检查，返回服务状态、内存使用、最后同步时间等
+   - `/api/v1/health/external`：外部API健康检查，检查9个外部API（4 FXG + 2 Creator + 2 Creator收益 + 1 Compass）健康状态
 
 ## 部署方案
 
@@ -86,18 +109,20 @@
       ▼
 Nginx 容器 (443/80) ──► 静态资源 (/assets/, /index.html)  [frontend 容器]
       │
+      ├───────────────► /api/v1/health ────────────┐
+      │                                              ▼
       └─► /api/v1/* ──► app 容器 (5000) ──► redis 容器 (6379)
+                   │                                       │
+                   │                                       └────► 外部API健康检查 /api/v1/health/external
                    │
                    └─► 内置定时同步任务 (background thread, schedule库)
-                   │
-                   ├─► fetch_products ──► FXG API (fxg.jinritemai.com)
-                   ├─► fetch_orders ──► FXG API
-                   ├─► fetch_creators ──► Creator API (creator.douyin.com)
-                   ├─► fetch_creator_works ──► Creator API
-                   ├─► check_alerts
-                   └─► scheduled_job (完整同步，60分钟间隔)
-
-健康检查 /api/v1/health
+                           │
+                           ├─► fetch_products ──► FXG API (fxg.jinritemai.com)
+                           ├─► fetch_orders ──► FXG API
+                           ├─► fetch_creators ──► Creator API (creator.douyin.com)
+                           ├─► fetch_creator_works ──► Creator API
+                           ├─► check_alerts
+                           └─► scheduled_job (完整同步，60分钟间隔)
 ```
 
 分布式锁：Redis `SET NX EX`（5分钟 TTL），由 `app` 容器内的 sync 调度器使用
@@ -112,6 +137,9 @@ Nginx 容器 (443/80) ──► 静态资源 (/assets/, /index.html)  [frontend 
 | 创作者收益汇总 | `/aweme/v1/creator/income/category/summary/` | GET | `GET /api/v1/external/creator/income/summary` | 系统级接口，分类汇总 day1/7/30 |
 | 创作者收益明细 | `/aweme/v1/creator/income/category/detail/` | GET | `GET /api/v1/external/creator/income/detail` | 系统级接口，chart坐标 + 每日收入列表 |
 | Compass 经营概况 | `/compass_api/shop/common/homepage/core_index_v3` | GET | `GET /api/v1/external/compass/shop/core-index` | 系统级接口，15 核心营业数据 |
+| 合规检测-商品 | 内部实现 | - | `GET /api/v1/compliance/check/products` | 基于规则引擎的商品合规检测 |
+| 合规检测-作品 | 内部实现 | - | `GET /api/v1/compliance/check/works` | 基于规则引擎的作品合规检测 |
+| 好货预览 | `/haohuo/api/product/preview` | POST | `POST /api/v1/external/haohuo/product/preview` | 好货平台商品预览数据 |
 
 ## 配置管理
 
@@ -133,8 +161,8 @@ Nginx 容器 (443/80) ──► 静态资源 (/assets/, /index.html)  [frontend 
 
 ## 监控与可观测性
 
-- **健康检查**：`GET /api/v1/health` 返回服务状态（`status: "healthy"`）、时间戳（CST +08:00）、最后同步时间（CST +08:00，来自 Redis `last_update`）
-- **外部 API 健康检查**：`GET /api/v1/health/external` 检查 9 个外部 API（4 FXG + 2 Creator + 2 Creator收益 + 1 Compass）健康状态、响应时间、HTTP 状态码
+- **健康检查**：`GET /api/v1/health` 返回服务状态（`status: "healthy"`）、时间戳（CST +08:00）、最后同步时间（CST +08:00，来自 Redis `last_update`）、内存使用和CPU利用率
+- **外部 API 健康检查**：`GET /api/v1/health/external` 检查 9 个外部 API（4 FXG + 2 Creator + 2 Creator收益 + 1 Compass）健康状态、响应时间、HTTP 状态码和错误详情
 - **数据源告警**：前端首页实时显示模拟数据持续时间、阈值超标告警
 - **日志**：结构化 JSON，含 trace_id、span_id，便于链路追踪
 - **指标**：可接入 Prometheus + Grafana 监控定时任务耗时、成功率、队列长度
@@ -146,7 +174,7 @@ Nginx 容器 (443/80) ──► 静态资源 (/assets/, /index.html)  [frontend 
 - **前端主题**：Design Tokens 体系支持一键切换主题（仅需替换 `variables.css` 变量值）
 - **API 版本化**：`/api/v1/` 前缀预留，便于后续多版本共存
 
-## 已知问题与修复记录 (2026-09-26)
+## 已知问题与修复记录 (2026-10-16)
 
 | 问题 | 原因 | 修复 |
 |------|------|------|
@@ -158,4 +186,7 @@ Nginx 容器 (443/80) ──► 静态资源 (/assets/, /index.html)  [frontend 
 | **5容器架构过于复杂** | `monitor` + `celery_worker` + `celery_beat` 三个独立进程，网络开销大 | **3容器架构精简**：合并 `monitor` + `celery_worker` 为单个 `app` 容器，移除 `celery_beat`，使用内置 scheduler |
 | 订单列表签名错误 | 带过期 `msToken`/`a_bogus` 导致 `10001010A` (SIGNATURE_ERROR) | `_request()` 新增 `skip_sign` 参数，`_fetch_orders_from_api()` 显式传 `skip_sign=True` |
 | **Nginx DNS 缓存导致反代失败** | 后端容器重建 IP 变化，nginx 启动时缓存旧 IP，导致 `Connection refused` | **方案 A**：`nginx.conf` 添加 `resolver 127.0.0.11 valid=10s ipv6=off` + `set $upstream_app http://app:5000` + `proxy_pass $upstream_app`，运行时解析，后端重启无需前端重启，最多 10 秒自动恢复 |
+| 健康检查端点未 documentation | 新增的健康检查端点未在架构文档中说明 | 已在网络拓扑和监控可观测性部分添加 `/api/v1/health` 和 `/api/v1/health/external` 说明 |
+| 合规检测端点缺失映射 | 新增的合规检测端点未在核心外部API映射中列出 | 已在核心外部API映射表中添加合规检测-商品和合规检测-作品的映射 |
+| 好货预览端点缺失映射 | 新增的好货预览端点未在核心外部API映射中列出 | 已在核心外部API映射表中添加好货预览的映射 |
 ```

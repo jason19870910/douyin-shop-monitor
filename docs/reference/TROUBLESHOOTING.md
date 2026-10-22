@@ -1,8 +1,8 @@
 ---
 title: 故障排查指南
-version: 1.0.0
+version: 1.0.2
 status: Published
-last_updated: 2026-10-15
+last_updated: 2026-10-17
 owner: DevOps Lead
 reviewers: [Tech Lead, 运维工程师, Backend Lead]
 approvers: [Tech Lead]
@@ -11,6 +11,8 @@ doc_id: DOC-REF-003
 tags: [参考, 故障排查, 故障处理, 运维, SRE, 自助诊断]
 related_docs: [DOC-OPS-001, DOC-OPS-003, DOC-OPS-005, DOC-REF-002]
 changelog: |
+  v1.0.2 (2026-10-17): 新增第 2.9 节合规检测返回 checked: 0 / 商品数据为空的排查步骤（FXG_COOKIES 过期/Redis 缓存空/上游 API code 10008） - DevOps Lead
+  v1.0.1 (2026-10-16): 同步架构变更 - 移除 Celery/MySQL 引用，改为内置调度器排查命令 - DevOps Lead
   v1.0.0 (2026-09-26): 初版创建 - DevOps Lead
 ---
 
@@ -30,8 +32,9 @@ changelog: |
 |--------|----------|----------|----------|
 | **服务存活** | `docker-compose ps` | 所有容器 Up | 重启异常容器 |
 | **健康检查** | `curl -s http://localhost/api/health` | `{"status":"ok"}` | 查看后端日志 |
-| **数据库** | `docker-compose exec mysql mysqladmin ping` | `mysqld is alive` | 检查磁盘/连接数 |
 | **Redis** | `docker-compose exec redis redis-cli ping` | `PONG` | 检查内存/连接数 |
+| **同步调度器** | `docker-compose logs app | grep -E "sync|schedule"` | 同步周期日志正常 | 检查调度器线程状态 |
+| **外部 API** | `curl -s http://localhost/api/health/external` | 返回 `{"status":"ok"}` | 检查 Cookie/签名/网络 |
 | **Nginx** | `curl -I https://wlkj-tech.cn` | `200 OK` | 检查配置/证书 |
 | **磁盘空间** | `df -h /` | 使用率 < 80% | 清理日志/备份 |
 | **内存使用** | `free -h` | 可用 > 20% | 排查泄漏/重启 |
@@ -60,15 +63,13 @@ changelog: |
 ```
 现象: 接口报 500/502/503/504，或响应时间 > 10s
 ├── 查看后端日志
-│   └── docker-compose logs backend -f --tail=100
-├── 检查数据库连接
-│   └── SHOW PROCESSLIST; 连接数/慢查询/锁等待
+│   └── docker-compose logs app -f --tail=100
 ├── 检查 Redis 连接
 │   └── INFO clients / 连接池配置
 ├── 检查外部 API 依赖
 │   └── FXG/Creator API 响应时间/错误率
-├── 检查 Celery Worker
-│   └── celery inspect ping / active_queues
+├── 检查内置调度器线程
+│   └── 日志含 schedule/sync 关键字 / 线程是否存活
 └── 检查资源限制
     └── docker stats / cgroup 限制 / OOM Killer
 ```
@@ -76,18 +77,18 @@ changelog: |
 ### 2.3 数据同步失败/延迟
 ```
 现象: 同步任务失败、数据不一致、同步耗时异常
-├── 查看同步任务状态
-│   └── SELECT * FROM sync_tasks ORDER BY created_at DESC LIMIT 20;
-├── 检查 Celery Worker 同步队列
-│   └── celery -A celery_app inspect active_queues
+├── 查看调度器执行状态
+│   └── docker-compose logs app | grep -E "sync_cycle|SYNC" 查看最近同步结果
+├── 检查同步锁状态
+│   └── docker-compose exec redis redis-cli GET douyin:monitor:sync:lock
 ├── 检查外部 API 响应
 │   └── FXG/Creator API: 429/5xx/超时/签名错误
 ├── 检查限流/熔断状态
 │   └── Redis: sync:rate_limit:* / sync:circuit_breaker:*
-├── 检查数据库写入性能
-│   └── 慢查询日志 / 索引覆盖 / 批量插入优化
+├── 检查缓存数据新鲜度
+│   └── Redis: GET douyin:last_sync_timestamp / 文件缓存时间戳
 └── 手动触发补偿同步
-    └── celery -A celery_app call tasks.sync_incremental --args='[shop_id]'
+    └── curl -X POST http://localhost/api/v1/sync -H "Authorization: Bearer $API_KEY"
 ```
 
 ### 2.4 前端页面白屏/报错
@@ -160,7 +161,7 @@ changelog: |
 │   └── 服务器是否能访问 haohuo.jinritemai.com (端口 443)
 │   └── curl -v "https://haohuo.jinritemai.com/aweme/v2/shop/promotion/pack/detail/" 测试
 ├── 检查后端日志
-│   └── docker-compose logs backend -f | grep haohuo
+│   └── docker-compose logs app -f | grep haohuo
 │   └── 查看 status_code: -1=连接错误, -2=超时, -3=请求失败, -99=未知异常
 └── 验证修复
     └── 返回 status_code: 0
@@ -170,19 +171,48 @@ changelog: |
     └── detail_info.jump_url 非空 (直播间/lynxview 跳转链接)
 ```
 
-### 2.5 权限/认证异常
+### 2.8 权限/认证异常
 ```
-现象: 401/403、Token 过期、跳转登录循环
-├── 检查 JWT 有效性
-│   └── 解码 Token: jq -R 'split(".")[1] | @base64d | fromjson'
-├── 检查 Refresh Token
-│   └── 是否过期/被撤销/并发刷新竞争
-├── 检查用户角色/店铺授权
-│   └── SELECT * FROM users u JOIN shop_authorizations sa ON u.id=sa.user_id WHERE u.id=xxx;
+现象: 401/403、凭证失效、无限跳转登录
+├── 检查认证 Header
+│   └── Authorization: Bearer <token> 与 X-API-Key 任一有效即可通过
+├── 确认端点是否在公共白名单
+│   └── health、health/external、auth/login、auth/callback、auth/qr-code、auth/status
+├── 检查后端认证中间件日志
+│   └── docker-compose logs app | grep -E "auth|401|403"
 ├── 检查 RBAC 策略配置
 │   └── docs/reference/PERMISSION.md 矩阵核对
 └── 检查时钟同步
-    └── date / ntpdate -q pool.ntp.org (偏差 > 1min 会导致 Token 校验失败)
+    └─► date / ntpdate -q pool.ntp.org (偏差 > 1min 会影响有效期判断)
+```
+
+### 2.9 合规检测返回 checked: 0 / 商品数据为空 (新增 2026-10-17)
+```
+现象: 合规检测接口 `/api/v1/compliance/check/products` 返回 `checked: 0`，商品列表为空，无法进行合规检测
+
+├─► 检查 Redis 商品缓存键
+│   └─► docker exec douyin_redis redis-cli GET douyin:monitor:products
+│   返回 `[]` 或为空 → 上游商品抓取未写入缓存，进入下一步
+
+├─► 检查 app 容器日志中的业务错误
+│   └─► docker logs douyin_app --tail 100 | grep -i "FXG API 业务错误"
+│   如出现 `code=10008` → FXG Cookie 已过期（API 返回 HTTP 200，但业务码 10008 "登录信息已失效，请重新登录"）
+
+├─► 检查 .env 中 Cookie 变量
+│   └─► grep FXG_COOKIES /opt/douyin-platform/config/.env
+│   值为空或已过期 → 按 RUNBOOK 第 5.2 节流程更新 FXG_COOKIES
+
+├─► 更新 Cookie 并重建容器（restart 不会重读 .env）
+│   └─► cd /opt/douyin-platform
+│   └─► docker compose up -d --force-recreate app
+│   └─► docker restart douyin_frontend   # 刷新前端 upstream 缓存
+
+├─► 验证恢复
+│   └─► docker exec douyin_redis redis-cli GET douyin:monitor:products   # 应非空
+│   └─► curl -H "X-API-Key: wlkj_douyin_api_20260921_abc123" http://localhost:5000/api/v1/compliance/check/products
+│   返回 `checked > 0` 即恢复正常
+
+> **根因**: FXG API 在 Cookie 过期时仍返回 HTTP 200，但响应体中 `code=10008`。fetcher.py 原先仅校验 HTTP 状态码，导致业务错误被静默吞掉，products 为空列表，合规检测返回 `checked: 0`。现已在 fetcher.py 增加业务错误码校验，Cookie 过期时会抛出 HTTPError 并记录明确 ERROR 日志，后续可直接通过 `docker logs douyin_app | grep "FXG API 业务错误"` 定位。
 ```
 
 ---
@@ -192,10 +222,8 @@ changelog: |
 | 组件 | 日志路径/命令 | 关键词过滤示例 |
 |------|--------------|---------------|
 | **Nginx** | `/var/log/nginx/access.log` `/var/log/nginx/error.log` | `grep " 5[0-9][0-9] " /var/log/nginx/access.log` |
-| **Backend (Flask)** | `docker-compose logs backend -f` | `grep -E "ERROR|CRITICAL|traceback" logs/backend.log` |
-| **Celery Worker** | `docker-compose logs celery_worker_sync -f` | `grep -E "FAILED|RETRY|REVOKED" logs/celery.log` |
-| **Celery Beat** | `docker-compose logs celery_beat -f` | `grep -E "SCHEDULER|TASK" logs/beat.log` |
-| **MySQL** | `/var/lib/mysql/*.err` `SHOW ENGINE INNODB STATUS` | `grep -i "deadlock\|lock wait" /var/lib/mysql/*.err` |
+| **Backend (Flask)** | `docker-compose logs app -f` | `grep -E "ERROR|CRITICAL|traceback" logs/app.log` |
+| **内置调度器** | `docker-compose logs app -f` (同 App 容器) | `grep -E "sync_cycle|SCHEDULER|SYNC" logs/app.log` |
 | **Redis** | `docker-compose logs redis -f` | `redis-cli MONITOR | grep -E "OOM|maxmemory"` |
 | **应用结构化日志** | ELK/Loki 查询 | `{service="backend"} | level="ERROR" | json` |
 
@@ -205,10 +233,10 @@ changelog: |
 
 | 症状 | 定位命令/工具 | 常见原因 | 解决方向 |
 |------|--------------|----------|----------|
-| **API P99 > 1s** | Grafana `http_request_duration_seconds` + `EXPLAIN ANALYZE` | 无索引/全表扫描/N+1 | 加索引/游标分页/缓存 |
-| **数据库 CPU 100%** | `SHOW PROCESSLIST` `pt-query-digest` | 慢查询/大事务/无索引 | Kill 长查询/加索引/拆分事务 |
+| **API P99 > 1s** | Grafana `http_request_duration_seconds` | 单线程 GIL 争用/Rabbit 慢/缓存穿透 | 缓存/异步/减少外部调用 |
+| **后端 CPU 100%** | `docker stats` `py-spy dump` | 同步请求阻塞/签名计算密集 | 检查外部 API 超时/签名性能 |
 | **Redis OOM** | `redis-cli INFO memory` `redis-cli --bigkeys` | 大 Key/无 TTL/内存碎片 | 缩短 TTL/压缩值/Cluster 分片 |
-| **Celery 积压** | `celery inspect active_queues` `flower` | Worker 不足/任务耗时长/外部 API 慢 | 扩容 Worker/异步分批/熔断降级 |
+| **同步周期超时** | `docker-compose logs app | grep sync_cycle` | 外部 API 慢/网络抖动/限流 | 调整 SCHEDULE_INTERVAL_MINUTES/熔断降级 |
 | **前端加载慢** | Lighthouse / Chrome DevTools Performance | Bundle 过大/无代码分割/无缓存 | 代码分割/预加载/CDN/压缩 |
 
 ---
@@ -217,32 +245,32 @@ changelog: |
 
 ### 5.1 服务重启 (按依赖顺序)
 ```bash
-# 1. 最小影响重启 (仅应用层)
-docker-compose restart backend celery_worker_sync celery_worker_report
+# 1. 最小影响重启 (仅应用层，内置调度器随容器重启)
+docker-compose restart backend
 
-# 2. 中等影响 (含消息队列/缓存)
-docker-compose restart redis celery_beat celery_worker_sync
+# 2. 中等影响 (含缓存)
+docker-compose restart redis backend
 
-# 3. 完全重启 (含数据库 - 需谨慎!)
+# 3. 完全重启 (需谨慎!)
 docker-compose down && docker-compose up -d
 
-# 4. 仅重启 Nginx (配置变更后)
+# 4. 仅重载 Nginx (配置变更后)
 docker-compose exec nginx nginx -s reload
 ```
 
-### 5.2 数据库紧急操作
+### 5.2 调度器/同步紧急操作
 ```bash
-# 查看连接数
-mysql -e "SHOW STATUS LIKE 'Threads_connected';"
+# 查看同步锁状态
+docker-compose exec redis redis-cli GET douyin:monitor:sync:lock
 
-# 杀掉阻塞查询
-mysql -e "KILL QUERY <thread_id>;"
+# 手动释放同步锁 (僵死时)
+docker-compose exec redis redis-cli DEL douyin:monitor:sync:lock
 
-# 临时只读 (防写入风暴)
-mysql -e "SET GLOBAL read_only=ON;"  # 恢复: SET GLOBAL read_only=OFF;
+# 手动触发同步
+curl -X POST http://localhost/api/v1/sync -H "Authorization: Bearer $API_KEY"
 
-# 紧急扩容连接数
-mysql -e "SET GLOBAL max_connections=500;"
+# 查看同步周期日志
+docker-compose logs app | grep -E "sync_cycle|SYNC"
 ```
 
 ### 5.3 Redis 紧急操作
@@ -280,22 +308,20 @@ docker-compose exec nginx nginx -s reload
 # ~/.bashrc 或 ~/.zshrc 追加
 alias dps='docker-compose ps'
 alias dlogs='docker-compose logs -f --tail=100'
-alias dlogb='docker-compose logs backend -f --tail=100'
-alias dlogc='docker-compose logs celery_worker_sync -f --tail=100'
+alias dlogb='docker-compose logs app -f --tail=100'
 alias dlogr='docker-compose logs redis -f --tail=100'
-alias dlogm='docker-compose logs mysql -f --tail=100'
 alias dexec='docker-compose exec'
-alias mysqlcli='docker-compose exec mysql mysql -u root -p'
 alias rediscli='docker-compose exec redis redis-cli'
-alias celeryi='docker-compose exec backend celery -A celery_app inspect'
-alias flower='docker-compose exec backend celery -A celery_app flower --port=5555'
+alias synclog='docker-compose logs app | grep -E "sync_cycle|SCHEDULER"'
 alias health='curl -s http://localhost/api/health | jq .'
-alias healthdb='docker-compose exec mysql mysqladmin ping'
+alias healthext='curl -s http://localhost/api/health/external | jq .'
 alias healthredis='docker-compose exec redis redis-cli ping'
+alias synclock='docker-compose exec redis redis-cli GET douyin:monitor:sync:lock'
+alias syncunlock='docker-compose exec redis redis-cli DEL douyin:monitor:sync:lock'
 alias dfh='df -h /'
 alias mem='free -h'
 alias cpu='uptime'
-alias ports='netstat -tlnp | grep -E ":80|:443|:5000|:3306|:6379"'
+alias ports='netstat -tlnp | grep -E ":80|:443|:5000|:6379"'
 alias disks='docker system df -v'
 ```
 
@@ -305,9 +331,9 @@ alias disks='docker system df -v'
 
 | 等级 | 判定标准 | 响应时限 | 通知范围 | 典型场景 |
 |------|----------|----------|----------|----------|
-| **P0** | 核心业务全不可用/数据丢失/安全事件 | 15 min | 全响应组+管理层 | MySQL 主库挂/数据泄露/全站 5xx |
+| **P0** | 核心业务全不可用/数据丢失/安全事件 | 15 min | 全响应组+管理层 | Redis 主库挂/数据泄露/全站 5xx |
 | **P1** | 核心功能严重受损/大量用户受影响 | 1 小时 | IC+TL+Ops+Comms | 同步全失败/API 错误率>10%/Redis 集群故障 |
-| **P2** | 部分功能异常/性能显著下降 | 4 小时 | IC+TL+Ops | 单接口慢/单 Worker 离线/磁盘告警 |
+| **P2** | 部分功能异常/性能显著下降 | 4 小时 | IC+TL+Ops | 单接口慢/调度器线程异常/磁盘告警 |
 | **P3** | 非核心功能/体验问题/观测盲区 | 1 工作日 | Owner | 报表失败/日志采集断/UI 样式错乱 |
 
 ---
@@ -334,11 +360,11 @@ alias disks='docker system df -v'
 | 10:45 | 业务验证通过 | 赵六 | - |
 
 ## 3. 根因分析 (5Why)
-1. Why? 订单同步任务连续失败
+1. Why? 订单同步周期连续失败
 2. Why? FXG API 返回 429 Too Many Requests
 3. Why? 并发请求数超过平台限制 (20 QPS)
 4. Why? 增量同步并发未做限流，突发流量触发限流
-5. Why? 代码未实现令牌桶限流，配置未同步到所有 Worker
+5. Why? 代码未实现令牌桶限流，同步周期并发配置分散
 
 **根因**: 同步任务缺乏客户端限流机制，配置管理不一致
 
@@ -352,7 +378,7 @@ alias disks='docker system df -v'
 | 编号 | 改进措施 | 负责人 | 截止日期 | 状态 | 验收标准 |
 |------|---------|--------|----------|------|----------|
 | ACT-001 | 实现客户端令牌桶限流 (20 QPS) | 李四 | 2026-10-10 | 进行中 | 压测验证 100 并发不触发 429 |
-| ACT-002 | 统一同步配置到 ConfigMap/Vault | 王五 | 2026-10-05 | 待开始 | 所有 Worker 读取统一配置 |
+| ACT-002 | 统一同步配置到 .env / docker-compose.yml | 王五 | 2026-10-05 | 待开始 | 服务读取统一环境变量 |
 | ACT-003 | 增加限流指标监控告警 | 张三 | 2026-10-08 | 待开始 | Grafana 有限流仪表盘 |
 
 ## 6. 经验教训
@@ -373,11 +399,9 @@ alias disks='docker system df -v'
 | TL (备) | | | | 架构师 |
 | Ops (主) | | | | 运维工程师 |
 | Ops (备) | | | | 运维工程师 |
-| DBA | | | | 数据库管理 |
 | 安全负责人 | | | | 安全团队 |
 | 云厂商支持 | - | 400-xxx-xxxx | - | 工单优先级 P0 |
 
 ---
 
-*文档版本: v1.0.0 | 维护责任: DevOps Lead | 更新周期: 季度或重大故障后*
-EOF
+*文档版本: v1.0.1 | 维护责任: DevOps Lead | 更新周期: 季度或重大故障后*

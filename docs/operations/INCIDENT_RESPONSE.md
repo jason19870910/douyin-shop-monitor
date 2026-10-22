@@ -1,16 +1,17 @@
 ---
 title: 故障应急响应预案
-version: 1.0.0
+version: 1.1.0
 status: Published
-last_updated: 2026-09-26
+last_updated: 2026-10-16
 owner: DevOps Lead
 reviewers: [Tech Lead, 安全负责人, 运维工程师]
 approvers: [Tech Lead]
 classification: Confidential
 doc_id: DOC-OPS-003
 tags: [运维, 应急响应, 故障处理, SRE, 事件管理]
-related_docs: [DOC-OPS-001, DOC-OPS-002, DOC-RISK-003]
+related_docs: [DOC-OPS-001, DOC-OPS-002, DOC-OPS-005, DOC-RISK-003]
 changelog: |
+  v1.1.0 (2026-10-16): 同步架构变更 - 移除 Celery/MySQL 引用，改为内置调度器故障场景 - DevOps Lead
   v1.0.0 (2026-09-26): 初版创建 - DevOps Lead
 ---
 
@@ -27,7 +28,7 @@ changelog: |
 
 | 级别 | 代码 | 定义 | 典型场景 | 响应时限 | 恢复目标 (RTO) |
 |------|------|------|---------|---------|---------------|
-| **P0 - 紧急** | SEV-0 | 核心业务完全中断、数据丢失、安全事件、全站不可用 | MySQL 主库宕机、数据泄露、勒索软件、核心 API 全部 5xx | **15 分钟** | < 30 分钟 |
+| **P0 - 紧急** | SEV-0 | 核心业务完全中断、数据丢失、安全事件、全站不可用 | Redis 主库宕机、数据泄露、勒索软件、核心 API 全部 5xx | **15 分钟** | < 30 分钟 |
 | **P1 - 高危** | SEV-1 | 核心功能严重受损、大量用户受影响、关键指标异常 | 同步任务连续失败、API 错误率 > 10%、Redis 集群故障、证书过期导致 HTTPS 失效 | **1 小时** | < 2 小时 |
 | **P2 - 中危** | SEV-2 | 部分功能异常、少量用户受影响、性能显著下降 | 单接口超时、告警风暴、单 Worker 离线、磁盘空间不足 | **4 小时** | < 8 小时 |
 | **P3 - 低危** | SEV-3 | 非核心功能异常、体验受影响但有绕行方案、观测盲区 | 非关键报表失败、日志采集中断、文档链接失效、UI 样式错乱 | **1 个工作日** | < 3 个工作日 |
@@ -35,7 +36,7 @@ changelog: |
 ### 2.2 影响范围判定
 | 影响范围 | 判定标准 | 示例 |
 |---------|---------|------|
-| 全站 | 所有用户、所有店铺、所有功能 | MySQL 主库宕机、SLB 故障 |
+| 全站 | 所有用户、所有店铺、所有功能 | Redis 主库宕机、SLB 故障 |
 | 多租户 | > 50% 店铺、> 50% 用户 | Redis 集群故障、核心 API 降级 |
 | 单租户/模块 | 单店铺、单功能模块 | 单店铺同步失败、合规检测异常 |
 | 内部/运维 | 仅运维/开发人员感知 | 监控指标缺失、CI/CD 失败 |
@@ -107,12 +108,12 @@ changelog: |
 
 ## 5. 常见故障场景与标准处理流程
 
-### 5.1 数据库故障
+### 5.1 缓存与同步故障
 | 故障现象 | 诊断步骤 | 标准处置 | 升级条件 |
 |---------|---------|---------|---------|
-| MySQL 主库不可连接 | 1. 检查进程/端口<br>2. 检查磁盘/内存/CPU<br>3. 检查错误日志<br>4. 尝试重启 | 1. VIP 漂移到从库<br>2. 修改 DNS/配置指向新主<br>3. 通知业务只读降级<br>4. 修复旧主重建从 | 5min 内未恢复 → P0 升级 |
-| 复制延迟 > 30s | 1. `SHOW SLAVE STATUS`<br>2. 检查长事务/大事务<br>3. 检查网络/IO | 1. 暂停写入流量<br>2. 杀掉阻塞事务<br>3. 调整并行复制参数<br>4. 必要时重做从库 | 延迟持续 > 5min → P1 |
-| 磁盘空间 > 90% | 1. `df -h` 定位大文件<br>2. 清理 Binlog/慢查询日志<br>3. 归档历史分区 | 1. 扩容磁盘 (云盘在线扩容)<br>2. 清理临时表/归档数据<br>3. 调整保留策略 | 空间 > 95% 且无法清理 → P0 |
+| Redis 主节点不可连接 | 1. 检查 Redis 进程/端口<br>2. 检查 Sentinel 状态<br>3. 检查客户端连接池<br>4. 尝试重启 Redis 容器 | 1. 确认 Sentinel 自动切主<br>2. 检查客户端重连<br>3. 验证缓存命中率恢复 | 5min 内未恢复 → P0 升级 |
+| 同步锁僵死 (douyin:monitor:sync:lock) | 1. `Redis GET douyin:monitor:sync:lock`<br>2. 检查调度器日志<br>3. 检查外部 API 响应 | 1. 手动释放同步锁 (DEL douyin:monitor:sync:lock)<br>2. 重启 app 容器<br>3. 手动触发同步接口 POST /api/v1/sync | 核心同步任务漏跑 → P1 |
+| 调度器线程异常 | 1. 查看后端日志 (docker-compose logs backend)<br>2. 检查 schedule 库运行状态<br>3. 检查 threading 线程是否存活 | 1. 重启 app 容器<br>2. 检查 SCHEDULE_INTERVAL_MINUTES 环境变量 | 同步全停止 → P1 |
 
 ### 5.2 Redis 故障
 | 故障现象 | 诊断步骤 | 标准处置 | 升级条件 |
@@ -125,8 +126,8 @@ changelog: |
 | 故障现象 | 诊断步骤 | 标准处置 | 升级条件 |
 |---------|---------|---------|---------|
 | API 错误率飙升 | 1. Grafana 看错误率/延迟<br>2. 日志检索错误堆栈<br>3. 关联最近变更 | 1. 回滚最近发布<br>2. 熔断下游依赖<br>3. 限流保护核心接口 | 回滚无效 → P0 架构师介入 |
-| Celery 任务积压 | 1. Flower 查队列长度<br>2. Worker 存活检查<br>3. 任务耗时分析 | 1. 扩容 Worker<br>2. 取消低优先级任务<br>3. 调整预取数/并发数 | 积压 > 1h 未消减 → P1 |
-| 定时任务未执行 | 1. Beat 进程检查<br>2. Schedule 状态<br>3. 时区/锁竞争 | 1. 重启 Beat<br>2. 手动触发补跑<br>3. 检查分布式锁 | 核心同步任务漏跑 → P1 |
+| 同步任务未执行/失败 | 1. 检查 Flask 应用容器状态<br>2. 查看同步锁状态 (Redis GET douyin:monitor:sync:lock)<br>3. 检查调度器日志<br>4. 检查外部 API 响应 | 1. 重启 app 容器<br>2. 手动释放同步锁 (DEL douyin:monitor:sync:lock)<br>3. 手动触发同步接口 | 核心同步任务漏跑 → P1 |
+| 调度器线程异常 | 1. 查看后端日志 (docker-compose logs backend)<br>2. 检查 schedule 库运行状态<br>3. 检查 threading 线程是否存活 | 1. 重启 app 容器<br>2. 检查 SCHEDULE_INTERVAL_MINUTES 环境变量 | 同步全停止 → P1 |
 
 ### 5.4 外部依赖故障
 | 故障现象 | 诊断步骤 | 标准处置 | 升级条件 |
@@ -232,7 +233,7 @@ changelog: |
 ### 8.1 演练计划
 | 演练类型 | 频率 | 场景示例 | 参与范围 |
 |---------|------|---------|---------|
-| 桌面推演 | 季度 | MySQL 主库切换、Redis 故障转移、外部 API 降级 | IC、TL、Ops |
+| 桌面推演 | 季度 | Redis 故障转移、外部 API 降级、调度器线程异常 | IC、TL、Ops |
 | 实战演练 | 半年 | 全链路故障注入 (Chaos Mesh) | 全响应组 + 业务方 |
 | 红蓝对抗 | 年度 | 渗透测试、数据泄露模拟 | 安全 + 运维 + 法务 |
 
@@ -267,20 +268,23 @@ changelog: |
 
 ### 10.1 常用应急命令速查
 ```bash
-# MySQL 主从切换
-# 1. 从库提升为主
-STOP SLAVE; RESET SLAVE ALL; SET GLOBAL read_only=OFF;
-# 2. 其他从库指向新主
-CHANGE MASTER TO MASTER_HOST='new_master_ip', MASTER_AUTO_POSITION=1; START SLAVE;
-
 # Redis Sentinel 手动故障转移
 redis-cli -h sentinel_ip -p 26379 SENTINEL FAILOVER mymaster
 
 # Docker 服务重启 (优雅)
-docker-compose -f docker-compose.prod.yml restart -t 30 backend
+docker-compose -f docker-compose.prod.yml restart -t 30 app
 
-# 查看 Celery 任务堆积
-docker-compose exec backend celery -A celery_app inspect active_queues
+# 检查调度器状态
+docker-compose logs backend -f | grep -E "schedule|sync|ERROR"
+
+# 检查同步锁状态
+docker-compose exec redis redis-cli GET douyin:monitor:sync:lock
+
+# 手动释放同步锁
+docker-compose exec redis redis-cli DEL douyin:monitor:sync:lock
+
+# 手动触发同步
+curl -X POST http://localhost/api/v1/sync -H "Authorization: Bearer $API_KEY" -H "X-API-Key: $API_KEY"
 
 # 紧急熔断下游 API (Nginx 限流)
 # 在 nginx.conf 中临时调整 limit_req_zone

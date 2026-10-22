@@ -1,8 +1,8 @@
 # API 规范文档
 
 > Douyin 监控平台统一 API 规范，包含内部后端 RESTful 接口与外部抖音电商后台接口。
-> **版本**: 2.3.0
-> **最后更新**: 2026-10-15
+> **版本**: 2.4.1
+> **最后更新**: 2026-10-17
 > **维护**: 项目核心团队
 
 ---
@@ -75,8 +75,11 @@ Base URL: `http://localhost:5000/api/v1` 开发 / 生产域名 `/api/v1`
 | PUT | `/api/v1/compliance/rules/:id` | 更新合规规则 |
 | DELETE | `/api/v1/compliance/rules/:id` | 删除合规规则 |
 | GET | `/api/v1/compliance/rules/:id/history` | 规则检查历史 |
-| POST | `/api/v1/compliance/check` | 触发合规检测 |
+| POST | `/api/v1/compliance/check` | 触发合规检测（全量） |
+| POST | `/api/v1/compliance/check/products` | **触发商品合规检测**（按 `applicable_to` 含 `product` 过滤规则，自动合并好货预览数据） |
+| POST | `/api/v1/compliance/check/works` | **触发作品合规检测**（按 `applicable_to` 含 `work` 过滤规则） |
 | GET | `/api/v1/compliance/export` | 导出合规报告 |
+| POST | `/api/v1/external/haohuo/product/preview` | **好货商品在线预览**（返回详情图片、规格、价格/销量/协议配置、跳转链接） |
 | GET | `/api/v1/version` | 版本信息 | 返回当前应用版本、git commit、构建时间和 API Key 内联状态 |
 | GET | `/api/v1/changes` | 获取最近变更 | 返回最近 10 条 git commit 变更记录 |
 | GET | `/api/v1/status` | 容器健康状态 | 检查 App/Redis/Frontend 三容器的健康状态 |
@@ -91,7 +94,7 @@ Base URL: `http://localhost:5000/api/v1` 开发 / 生产域名 `/api/v1`
 | POST | `/api/v1/alerts/dian/config` | 更新抖店告警配置 |
 | GET | `/api/v1/alerts/douyin/config` | 获取抖音告警配置 |
 | POST | `/api/v1/alerts/douyin/config` | 更新抖音告警配置 |
-| POST | `/api/v1/sync/manual` | 手动触发同步（支持 `?async=true` 异步模式） |
+| POST | `/api/v1/sync/manual` | 手动触发同步（同步执行） |
 | GET | `/api/v1/sync/history` | 同步历史 |
 | GET | `/api/v1/mock/status` | Mock 状态 |
 | GET | `/api/v1/videos` | 视频列表 |
@@ -124,7 +127,7 @@ Base URL: `http://localhost:5000/api/v1` 开发 / 生产域名 `/api/v1`
 | **趋势图：销售趋势 (近7天)** | `GET /api/v1/dashboard/stats` | 返回 `sales_trend` 数组（[{date, amount}]） |
 | **TOP 5：热销商品** | `GET /api/v1/dashboard/stats` | 返回 `top_products` 数组（含 `product_name`、`price_lower`(分)、`sales_today`） |
 | 系统健康 | `GET /api/v1/health` | 返回 status、last_update、timestamp；数据来源从 dashboard/stats 的 data_source 字段获取 |
-| 立即同步触发 | `POST /api/v1/sync/manual` | 手动触发同步（支持 `?async=true` 异步模式），成功后刷新健康状态 |
+| 立即同步触发 | `POST /api/v1/sync/manual` | 手动触发同步（同步执行），成功后刷新健康状态 |
 | 合规告警（可选） | `GET /api/v1/compliance/stats` + `GET /api/v1/compliance?status=pending&size=5` | 未处理高危违规数量与最近 5 条记录 |
 | 告警配置开关 | `GET /api/v1/alerts/config`、`GET /api/v1/alerts/dian/config`、`GET /api/v1/alerts/douyin/config` | 是否启用各类预警 |
 | Mock / 降级开关 | `GET /api/v1/mock/status` | 前端根据此决定是否展示占位数据 |
@@ -448,8 +451,7 @@ const { data: externalHealth, isLoading } = useExternalApiHealth({});
 
 `POST /api/v1/sync`
 
-**查询参数**：
-- `async` (可选): `true` / `false` - 是否异步执行（默认 `false`）
+**执行方式**：手动触发同步由 app 容器**同步执行**，无独立任务队列；定时同步由 app 容器内置调度器（schedule + threading）按 `SCHEDULE_INTERVAL_MINUTES`（默认 60 分钟）触发。原 `?async=true` 异步模式（Celery 任务队列）已随 3 容器架构精简移除。
 
 **同步模式返回**：
 ```json
@@ -465,16 +467,6 @@ const { data: externalHealth, isLoading } = useExternalApiHealth({});
     "compliance": "success",
     "alerts": "success"
   }
-}
-```
-
-**异步模式返回**：
-```json
-{
-  "status": "started",
-  "mode": "async",
-  "task_id": "celery-task-id",
-  "message": "Full sync task queued"
 }
 ```
 
@@ -1960,10 +1952,10 @@ const jumpUrl = preview?.detail_info?.jump_url;
 
 ### 2. Redis 缓存共享问题
 
-**现象**：Flask 容器 (`douyin_monitor`) 和 Celery Worker (`douyin_celery_worker`) 各自独立内存缓存，Redis 连接失败时回退到内存字典 (`redis_cache.py:104-107`)，导致同步任务写入 Redis 但 Flask 读不到。
+**现象**：单 app 容器 (`douyin_app`) 在 Redis 连接失败时若回退到进程内内存字典，会导致同步任务写入 Redis 但读取方读到旧缓存。（历史案例：5 容器时代 Flask (`douyin_monitor`) 与 Celery Worker (`douyin_celery_worker`) 各自持有独立内存缓存；2026-10-16 起单 app 容器共享缓存，且 `redis_cache.py` 已移除内存 fallback，连接失败直接抛错，此问题不再复现，此处保留作为 Redis 连接异常排障参考）
 
 **解决**：
-- 重启两个容器确保 Redis 连接建立：`docker restart douyin_monitor douyin_celery_worker`
+- 重启 app 容器确保 Redis 连接建立：`docker restart douyin_app`
 - 验证：`docker exec douyin_redis redis-cli GET 'douyin:monitor:creators'`
 
 ### 3. 创作者概览字段解析修复
@@ -2106,6 +2098,8 @@ FP=                                # 抖店 fp 参数
 # =========================================================================
 FXG_COOKIES=                       # 抖店 Cookie (fxg.jinritemai.com)
 CREATOR_COOKIES=                   # 创作者中心 Cookie (creator.douyin.com)
+COMPASS_COOKIES=                   # 指南针 Cookie (compass.jinritemai.com)，/external/compass/shop/core-index 必填
+HAOHUO_COOKIES=                    # 好货平台 Cookie (haohuo.jinritemai.com)，/external/haohuo/product/preview 必填
 
 # =========================================================================
 # 抖店 Shop ID 与 Log ID（多店铺场景需配置）
@@ -2118,10 +2112,13 @@ FXG_ORDER_AID=4272                 # 抖店订单列表 aid
 CREATOR_WORK_AID=1128              # 创作者作品列表 aid
 
 # =========================================================================
-# Celery / Redis 配置
+# Redis 配置（缓存 / 分布式锁，3 容器架构：app / redis / frontend）
 # =========================================================================
-CELERY_BROKER_URL=redis://redis:6379/0
-CELERY_RESULT_BACKEND=redis://redis:6379/0
+REDIS_HOST=redis
+REDIS_PORT=6379
+
+# 定时同步间隔（分钟，app 容器内置调度器 schedule + threading）
+SCHEDULE_INTERVAL_MINUTES=60
 
 # =========================================================================
 # 创作者中心内容管理 API
@@ -2169,6 +2166,8 @@ METRICS_PORT=9090
 # /run/secrets/fp                   -> FP
 # /run/secrets/fxg_shop_id          -> FXG_SHOP_ID
 # /run/secrets/fxg_log_id           -> FXG_LOG_ID
+# /run/secrets/compass_cookies      -> COMPASS_COOKIES
+# /run/secrets/haohuo_cookies       -> HAOHUO_COOKIES
 ```
 
 **前端环境变量**（`.env` 或 `.env.production`）：
@@ -2249,6 +2248,19 @@ VITE_API_BASE_URL=http://localhost:5000       # 开发环境后端地址
 ---
 
 ## 变更记录
+
+- **2026-10-17 v2.4.1**：
+  - 环境变量清单补登新增外部 API 依赖的两个 Cookie 变量：`COMPASS_COOKIES`（指南针店铺核心指标接口 `/api/v1/external/compass/shop/core-index`）与 `HAOHUO_COOKIES`（好货商品预览接口 `/api/v1/external/haohuo/product/preview`）；此前两个变量仅在正文出现，未登记在「环境变量配置」章节及 Docker Secrets 映射表中
+  - 同步更新 `config/.env.example` 与 `src/backend/.env.example` 模板
+
+- **2026-10-16 v2.4.0**：
+  - 文档同步更新：根据代码实际状态更新 API_SPEC.md、ARCHITECTURE.md 和 RUNBOOK.md
+  - 新增端点详细文档：/api/v1/health/external (9个外部API健康检查)、/api/v1/compliance/check/products、/api/v1/compliance/check/works、/api/v1/external/haohuo/product/preview、/api/v1/external/creator/income/summary、/api/v1/external/creator/income/detail、/api/v1/external/compass/shop/core-index
+  - 修正现有端点字段描述：/api/v1/products/stats (扁平格式)、/api/v1/orders/stats (金额单位元)、/api/v1/creators/overview (data_source: "cache")
+  - 补充认证机制：双 Header 验证 (Authorization: Bearer + X-API-Key)、PUBLIC_ENDPOINTS 白名单完整列表
+  - 补充分布式锁机制：Redis SET NX EX 5分钟 TTL 保护同步任务
+  - 补充签名策略：skip_sign 参数使用场景、长效参数显式传递、强时效参数跳过注入
+  - 更新架构和运维文档以反映 3容器简化架构和内置调度器实现
 
 - **2026-10-08 v2.2.0**：
   - 全面更新 6 个外部 API 实测返回字段完整文档（基于 2026-10-08 容器环境实测）：

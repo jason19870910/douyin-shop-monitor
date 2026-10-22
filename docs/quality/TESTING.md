@@ -1,8 +1,8 @@
 ---
 title: 测试与质量保障规范
-version: 2.0.0
+version: 2.1.0
 status: Published
-last_updated: 2026-10-07
+last_updated: 2026-10-16
 owner: QA Lead
 reviewers: ['Tech Lead', 'Backend Lead', 'Frontend Lead']
 approvers: ['Tech Lead']
@@ -14,6 +14,7 @@ related_docs:
   - '../api/API_SPEC.md'
   - '../architecture/ARCHITECTURE.md'
 changelog: |
+  v2.1.0 (2026-10-16): 同步架构变更 - 性能隐患排查表改为 Redis/外部 API 视角，同步周期措辞替代 Celery，日志命令统一为 docker-compose logs app - DevOps Lead
   v2.0.0 (2026-10-07): 合并 TEST_STRATEGY.md、QUALITY_PLAN.md、TEST_REPORT_TEMPLATE.md、CODE_REVIEW_CHECKLIST.md 为统一规范 - DevOps Lead
   v1.0.0 (2026-08-18): 初始版本，拆分为测试策略、质量计划、测试报告模板、Code Review 清单四份文档 - Auto
 ---
@@ -128,7 +129,7 @@ changelog: |
 - [ ] 类型注解完整、`mypy --strict` 通过
 - [ ] 依赖版本锁定、可复现部署、无安全调用、复用连接池
 - [ ] 数据库查询优化 (无 N+1、大事务拆分)
-- [ ] Celery 任务幂等、可重试、有超时、结果后置处理
+- [ ] 同步周期幂等、可重试、有超时、结果后置处理
 
 #### TypeScript/React (Frontend)
 - [ ] `strict: true` 通过、无 `any` 滥用
@@ -258,7 +259,7 @@ changelog: |
 - [ ] 类型注解完整、`mypy --strict` 通过
 - [ ] 依赖版本锁定、可复现部署、无安全调用、复用连接池
 - [ ] 数据库查询优化 (无 N+1、大事务拆分)
-- [ ] Celery 任务幂等、可重试、有超时、结果后置处理
+- [ ] 同步周期幂等、可重试、有超时、结果后置处理
 
 #### TypeScript/React (Frontend)
 - [ ] `strict: true` 通过、无 `any` 滥用
@@ -298,11 +299,11 @@ changelog: |
 ### 4.7 性能隐患排查
 | 场景 | 症状 | 优化方向 |
 |------|------|----------|
-| N+1 查询 | 列表接口查询数 = N+1 | `joinedload`/`selectinload`/批量查询 |
-| 大事务 | 长时间持有锁、主库 CPU 飙升 | 拆分事务、异步补偿、读写分离 |
-| 无索引全表扫 | `EXPLAIN type=ALL` | 添加联合索引、分页用游标/Keyset |
-| 缓存击穿 | 热 Key 过期瞬间 DB 压力激增 | 互斥锁重建+过期抖动+主动更新 |
-| 连接池耗尽 | "Too many connections" | 调整池大小、排查泄漏、引入连接复用 |
+| N+1 外部调用 | 单个接口触发多次外部 API 请求 | 合并/批量请求、结果缓存 |
+| 缓存击穿 | 热 Key 过期瞬间外部 API 压力激增 | 互斥锁重建+过期抖动+主动更新 |
+| 大缓存值 | API 响应体积大、序列化慢 | 压缩/分页/裁剪字段 |
+| 外部调用无超时 | 请求 hang 死拖慢整体同步周期 | 统一 timeout + 重试上限 |
+| Redis 连接泄漏 | 连接数持续增长、偶发连接异常 | 复用连接、排查泄漏、连接池上限 |
 
 ### 4.8 审核结论
 | 结论 | 含义 | 后续动作 |
@@ -438,7 +439,7 @@ trivy fs . --severity CRITICAL,HIGH
 
 > **执行建议**:
 > 1. 优先补全核心模块单元测试 (`config.py`、`douyin_sign.py`、`_request`、`fetch_and_store_*`)
-> 2. 引入 Testcontainers 实现集成测试真实依赖 Redis/Celery
+> 2. 引入 Testcontainers 实现集成测试真实依赖 Redis
 > 3. 配置 Playwright E2E 覆盖 4 条核心用户旅程
 > 4. 接入 Codecov + Pact Broker 可视化覆盖率与契约兼容性
 > 5. 强制 PR 模板包含 Code Review Checklist 标准项

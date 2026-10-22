@@ -1,8 +1,8 @@
 ---
 title: 验收标准
-version: 1.0.0
+version: 1.1.0
 status: Published
-last_updated: 2026-09-26
+last_updated: 2026-10-16
 owner: PM
 reviewers: [QA Lead, Tech Lead, 业务分析师]
 approvers: [PM]
@@ -11,6 +11,7 @@ doc_id: DOC-REQ-003
 tags: [需求, 验收标准, 测试, UAT]
 related_docs: [DOC-REQ-001, DOC-REQ-002, DOC-QA-001]
 changelog: |
+  v1.1.0 (2026-10-16): 认证方式同步为 API Key 双 Header 认证，移除 JWT + Redis 会话描述 - PM
   v1.0.0 (2026-09-26): 初版创建 - PM
 ---
 
@@ -44,7 +45,7 @@ changelog: |
 | 要求 | 验收方式 |
 |------|----------|
 | HTTPS 强制 | 全站 TLS 1.2+，HSTS 开启 |
-| 认证鉴权 | JWT + Redis 会话，Token 自动刷新 |
+| 认证鉴权 | API Key 双 Header 认证（`Authorization: Bearer <API_KEY>` 或 `X-API-Key: <API_KEY>`，任一通过即可） |
 | 权限控制 | RBAC 矩阵，API 级别鉴权 |
 | 敏感数据 | Cookie/Token 不记录日志，脱敏展示 |
 | XSS 防护 | CSP 策略，输入输出编码 |

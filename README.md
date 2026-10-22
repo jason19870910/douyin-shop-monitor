@@ -13,7 +13,7 @@
 
 ## 功能概览
 
-- **数据采集**：Celery Beat/Worker 定时拉取商品、订单、创作者与作品数据
+- **数据采集**：内置调度器（schedule 库 + 后台线程）定时拉取商品、订单、创作者与作品数据
 - **看板与业务页**：Dashboard、商品/订单、视频/创作者、账号、合规、告警
 - **首页重构**：4 模块竖向布局（商品统计、订单统计、创作者概览、系统健康），左侧栏保持不变
 - **授权**：抖音开放平台 OAuth（登录 / 回调 / Token 刷新）
@@ -26,7 +26,7 @@
 
 ```
 ├── src/
-│   ├── backend/          # Flask API + Celery + 抓取服务
+│   ├── backend/          # Flask API + 内置调度器 + 抓取服务
 │   └── frontend/         # React + Vite + Ant Design
 ├── tests/backend/        # 后端单元 / 集成 / 契约测试
 ├── api/openapi.yaml      # OpenAPI 规范
@@ -62,7 +62,7 @@ docker compose up -d
 ## API
 
 - 前缀：`/api/v1`
-- 认证：`Authorization: Bearer <API_KEY>` + `X-API-Key: <API_KEY>`（健康检查与 OAuth 回调除外）
+- 认证：`Authorization: Bearer <API_KEY>` + `X-API-Key: <API_KEY>`（双 Header，任一通过即可）；公共端点无需认证：`/api/v1/health`、`/api/v1/health/external`、`/api/v1/auth/login`、`/api/v1/auth/callback`、`/api/v1/auth/qr-code`、`/api/v1/auth/status`
 - 文档：`api/openapi.yaml`；若安装 flasgger，可访问 `/apidocs`
 
 ## 核心外部 API 映射
@@ -94,11 +94,12 @@ ssh root@122.51.208.138 "docker cp /tmp/frontend_build douyin_frontend:/usr/shar
 
 | 文档 | 说明 |
 |------|------|
-| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 系统架构 |
-| [docs/FRONTEND_DESIGN.md](./docs/FRONTEND_DESIGN.md) | 前端设计规范 |
-| [docs/api/API_SPEC.md](./docs/api/API_SPEC.md) | API 规范 |
-| [docs/CHANGELOG.md](./docs/CHANGELOG.md) | 版本变更记录 |
-| [docs/DEV_SETUP.md](./docs/DEV_SETUP.md) | 开发环境搭建 |
+| [文档站](./docs/README.md) | 文档中心（推荐入口，含完整文档地图） |
+| [系统架构](./docs/architecture/ARCHITECTURE.md) | 架构概览（含外部 API 映射） |
+| [前端设计](./docs/architecture/FRONTEND_DESIGN.md) | 前端设计规范 |
+| [API 规范](./docs/api/API_SPEC.md) | API 规范 |
+| [CHANGELOG](./CHANGELOG.md) | 版本变更记录 |
+| [DEV_SETUP](./DEV_SETUP.md) | 开发环境搭建 |
 
 ## 许可证
 

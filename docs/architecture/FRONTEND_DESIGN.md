@@ -1,4 +1,4 @@
-﻿# 前端设计文档 (Frontend Design)
+# 前端设计文档 (Frontend Design)
 
 ## 技术栈
 
