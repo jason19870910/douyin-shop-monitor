@@ -968,6 +968,23 @@ class HaohuoImageRulePlugin(BaseRulePlugin):
                 execution_time_ms=execution_time
             )
 
+        return self._create_outcome(
+            rule_id=context.rule_config.get("rule_id", context.rule_config.get("id", "unknown")),
+            rule_name=context.rule_config.get("rule_name", "Haohuo Image Compliance"),
+            status=CheckResult.PASS,
+            message=f"所有 {checked_count} 张图片通过合规检查",
+            details={
+                "violations": [],
+                "checked_count": checked_count,
+                "config": {
+                    "min_width": min_width, "max_width": max_width,
+                    "min_height": min_height, "max_height": max_height,
+                    "allowed_ratios": allowed_ratios
+                }
+            },
+            execution_time_ms=execution_time
+        )
+
 
 class HaohuoSpecRulePlugin(BaseRulePlugin):
     """HAOHUO_SPEC rule type - 规格/属性完整性检测。
@@ -1484,7 +1501,22 @@ class RuleEngine:
             )
         
         try:
-            return plugin.check(context)
+            outcome = plugin.check(context)
+            if outcome is None:
+                logger.error(
+                    "Plugin for rule type {} returned None (rule_id={})".format(
+                        rule_type.value, context.rule_config.get("rule_id")
+                    )
+                )
+                return CheckOutcome(
+                    rule_id=context.rule_config.get("rule_id", "unknown"),
+                    rule_name=context.rule_config.get("rule_name", "Unknown Rule"),
+                    rule_type=rule_type,
+                    status=CheckResult.ERROR,
+                    message=f"Plugin returned no outcome for rule type: {rule_type.value}",
+                    execution_time_ms=0
+                )
+            return outcome
         except Exception as e:
             logger.error(f"Rule check failed for {context.rule_config.get('rule_id')}: {e}")
             return CheckOutcome(
@@ -1503,7 +1535,12 @@ class RuleEngine:
         for rule in rules:
             if not rule.get("enabled", True):
                 continue
-            
+
+            # 规则配置以 id 字段作为规则标识（缓存/文件中的规则无 rule_id 键），
+            # 此处统一归一化出 rule_id，避免各插件/日志回退到 "unknown"
+            if not rule.get("rule_id") and rule.get("id"):
+                rule = dict(rule, rule_id=rule["id"])
+
             rule_ctx = RuleContext(
                 target_type=target_type,
                 target_id=target_id,

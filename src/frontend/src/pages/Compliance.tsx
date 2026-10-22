@@ -38,7 +38,23 @@ const RULE_TYPE_OPTIONS = [
   'KEYWORD', 'REGEX', 'PRICE', 'LICENSE', 'ML_MODEL', 'CUSTOM_SCRIPT',
   'HAOHUO_IMAGE', 'HAOHUO_SPEC', 'HAOHUO_PRICE', 'HAOHUO_FATAL'
 ];
+const RULE_TYPE_LABELS: Record<string, string> = {
+  KEYWORD: '关键词规则',
+  REGEX: '正则规则',
+  PRICE: '价格规则',
+  LICENSE: '授权规则',
+  ML_MODEL: '机器学习模型规则',
+  CUSTOM_SCRIPT: '自定义脚本规则',
+  HAOHUO_IMAGE: '好货图片规则',
+  HAOHUO_SPEC: '好货规格规则',
+  HAOHUO_PRICE: '好货价格规则',
+  HAOHUO_FATAL: '好货致命规则',
+};
 const SEVERITY_OPTIONS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+const TARGET_TYPE_LABELS: Record<string, string> = {
+  product: '商品',
+  work: '作品',
+};
 const APPLICABLE_TO_OPTIONS = [
   { label: '商品', value: 'product' },
   { label: '作品', value: 'work' },
@@ -97,6 +113,31 @@ const stringifyRuleContent = (rule: ComplianceRule): string => {
   } catch {
     return '';
   }
+};
+
+const renderMatchedContent = (content: unknown): React.ReactNode => {
+  if (!content) return '-';
+  if (typeof content === 'string') return content || '-';
+  if (Array.isArray(content)) {
+    return content.map((c, i) => (
+      <div key={i}>{typeof c === 'object' ? JSON.stringify(c, null, 2) : String(c)}</div>
+    ));
+  }
+  if (typeof content === 'object') {
+    const entries = Object.entries(content as Record<string, unknown>);
+    if (entries.length === 0) return '-';
+    return (
+      <div style={{ whiteSpace: 'pre-wrap', fontSize: '0.9em' }}>
+        {entries.map(([k, v]) => (
+          <div key={k}>
+            <strong>{k}:</strong>{' '}
+            {typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v)}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return String(content);
 };
 
 const Compliance = () => {
@@ -230,7 +271,14 @@ const Compliance = () => {
     { title: '记录ID', dataIndex: 'id', key: 'id', width: 150, ellipsis: true },
     {
       title: '目标类型', dataIndex: 'target_type', key: 'target_type', width: 110,
-      render: (v: unknown) => (v ? <Tag>{String(v)}</Tag> : '-'),
+      render: (v: unknown) => <Tag>{TARGET_TYPE_LABELS[String(v)] || String(v)}</Tag>,
+    },
+    {
+      title: '目标名称', dataIndex: 'target_name', key: 'target_name', width: 200, ellipsis: true,
+      render: (v: unknown, record: ComplianceItem) => {
+        const name = v || record.product_title;
+        return name ? <Tooltip title={String(name)}><span>{String(name)}</span></Tooltip> : '-';
+      },
     },
     {
       title: '关联规则', dataIndex: 'rule_id', key: 'rule_id', width: 130, ellipsis: true,
@@ -274,7 +322,7 @@ const Compliance = () => {
     { title: '规则名称', dataIndex: 'rule_name', key: 'rule_name', width: 200, ellipsis: true },
     {
       title: '类型', dataIndex: 'rule_type', key: 'rule_type', width: 110,
-      render: (v: unknown) => <Tag color="blue">{String(v)}</Tag>,
+      render: (v: unknown) => <Tag color="blue">{RULE_TYPE_LABELS[String(v)] || String(v)}</Tag>,
     },
     {
       title: '严重程度', dataIndex: 'severity', key: 'severity', width: 100, align: 'center',
@@ -329,10 +377,11 @@ const Compliance = () => {
   const statCards = useMemo(() => {
     if (!stats) return [];
     return [
-      { label: '总检查数', value: stats.total_checks, color: colors.primary[500] },
-      { label: '通过', value: stats.passed, color: colors.success[500] },
+      // 日志仅记录违规/告警，total_checks 实为违规记录总数
+      { label: '违规记录数', value: stats.total_checks, color: colors.primary[500] },
       { label: '失败', value: stats.failed, color: colors.error[500] },
       { label: '告警', value: stats.warning, color: colors.warning[500] },
+      { label: '已忽略', value: stats.ignored, color: colors.neutral[500] },
     ];
   }, [stats]);
 
@@ -473,10 +522,11 @@ const Compliance = () => {
                   columns: [
                     { key: 'id', label: '记录ID' },
                     { key: 'target_type', label: '目标类型' },
+                    { key: 'target_id', label: '目标ID' },
+                    { key: 'target_name', label: '目标名称' },
                     { key: 'rule_id', label: '关联规则' },
                     { key: 'status', label: '状态' },
-                    { key: 'productId', label: '产品ID' },
-                    { key: 'product_title', label: '产品标题' },
+                    { key: 'severity', label: '风险等级' },
                     { key: 'created_at', label: '创建时间' },
                     { key: 'taken_down_at', label: '下架时间' },
                     { key: 'restored_at', label: '恢复时间' },
@@ -496,15 +546,21 @@ const Compliance = () => {
                     { title: '记录ID', dataIndex: 'id', key: 'id', ellipsis: true },
                     {
                       title: '目标类型', dataIndex: 'target_type', key: 'target_type', width: 110,
-                      render: (v: unknown) => (v ? <Tag>{String(v)}</Tag> : '-'),
+                      render: (v: unknown) => <Tag>{TARGET_TYPE_LABELS[String(v)] || String(v)}</Tag>,
                     },
                     {
-                      title: '产品ID', dataIndex: 'productId', key: 'productId', width: 150,
-                      render: (v: unknown) => (v ? <Tag>{String(v)}</Tag> : '-'),
+                      title: '商品ID', dataIndex: 'target_id', key: 'target_id', width: 150,
+                      render: (v: unknown, record: ComplianceItem) => {
+                        const id = v || record.productId;
+                        return id ? <Tag>{String(id)}</Tag> : '-';
+                      },
                     },
                     {
-                      title: '产品标题', dataIndex: 'product_title', key: 'product_title', width: 200,
-                      render: (v: unknown) => (v ? <Tooltip title={String(v)}><span>{String(v)}</span></Tooltip> : '-'),
+                      title: '商品标题', dataIndex: 'target_name', key: 'target_name', width: 200,
+                      render: (v: unknown, record: ComplianceItem) => {
+                        const name = v || record.product_title;
+                        return name ? <Tooltip title={String(name)}><span>{String(name)}</span></Tooltip> : '-';
+                      },
                     },
                     {
                       title: '状态', dataIndex: 'status', key: 'status', width: 100, align: 'center',
@@ -519,10 +575,12 @@ const Compliance = () => {
                       render: (v: unknown) => (v ? String(v) : '-'),
                     },
                     {
-                      title: '风险等级', dataIndex: 'risk_level', key: 'risk_level', width: 100, align: 'center',
-                      render: (v: unknown) => {
-                        const meta = SEVERITY_META[String(v)];
-                        return meta ? <Tag color={meta.color}>{meta.label}</Tag> : <Tag>{String(v)}</Tag>;
+                      title: '风险等级', dataIndex: 'severity', key: 'severity', width: 100, align: 'center',
+                      render: (v: unknown, record: ComplianceItem) => {
+                        const raw = v || record.risk_level;
+                        const meta = SEVERITY_META[String(raw)];
+                        if (meta) return <Tag color={meta.color}>{meta.label}</Tag>;
+                        return raw ? <Tag>{String(raw)}</Tag> : '-';
                       },
                     },
                     {
@@ -574,8 +632,14 @@ const Compliance = () => {
             <Descriptions.Item label="状态">
               {STATUS_META[detailItem.status]?.label || detailItem.status}
             </Descriptions.Item>
-            <Descriptions.Item label="目标类型">{detailItem.target_type || '-'}</Descriptions.Item>
+            <Descriptions.Item label="目标类型">{TARGET_TYPE_LABELS[String(detailItem.target_type)] || detailItem.target_type || '-'}</Descriptions.Item>
             <Descriptions.Item label="关联规则">{detailItem.rule_id || '-'}</Descriptions.Item>
+            <Descriptions.Item label="违规详情">
+              {detailItem.matched_content ? renderMatchedContent(detailItem.matched_content) : '-'}
+              {detailItem.details ? (
+                <div style={{ marginTop: 8 }}>{renderMatchedContent(detailItem.details)}</div>
+              ) : null}
+            </Descriptions.Item>
             <Descriptions.Item label="创建时间">{detailItem.created_at ? formatDate(detailItem.created_at) : '-'}</Descriptions.Item>
             <Descriptions.Item label="忽略时间">{detailItem.ignored_at ? formatDate(detailItem.ignored_at) : '-'}</Descriptions.Item>
             <Descriptions.Item label="下架时间">{detailItem.taken_down_at ? formatDate(detailItem.taken_down_at) : '-'}</Descriptions.Item>
@@ -599,7 +663,7 @@ const Compliance = () => {
             <Input placeholder="如：违禁词检查" maxLength={200} />
           </Form.Item>
           <Form.Item name="rule_type" label="规则类型" rules={[{ required: true }]}>
-            <Select options={RULE_TYPE_OPTIONS.map((t) => ({ value: t, label: t }))} />
+            <Select options={RULE_TYPE_OPTIONS.map((t) => ({ value: t, label: RULE_TYPE_LABELS[t] || t }))} />
           </Form.Item>
           <Form.Item name="severity" label="严重程度" rules={[{ required: true }]}>
             <Select options={SEVERITY_OPTIONS.map((s) => ({ value: s, label: SEVERITY_META[s]?.label || s }))} />

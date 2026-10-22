@@ -4,7 +4,13 @@ import os
 
 from flask import Blueprint, request
 from services.rule_engine import get_rule_engine, run_compliance_check, CheckResult, RuleContext
-from services.fetcher import cache, CACHE_KEYS, DEFAULT_COMPLIANCE
+from services.fetcher import (
+    cache, CACHE_KEYS, DEFAULT_COMPLIANCE,
+    COMPLIANCE_RULES_FILE, COMPLIANCE_FILE, COMPLIANCE_LOG_STATUSES,
+    filter_rules_for_target, build_compliance_log_entry,
+    _enrich_product_with_haohuo, _append_compliance_logs, _persist_compliance_logs,
+    ensure_haohuo_rules,
+)
 from datetime import datetime
 from utils.responses import success_response, not_found_response, bad_request_response
 
@@ -39,19 +45,44 @@ def _ensure_list(value):
         return []
     return value
 
+# 旧违规日志 category/target_type 为英文枚举，读取展示时统一归一化为中文标签
+CATEGORY_LABELS = {
+    'product': '商品合规',
+    'haohuo_product': '商品合规',
+    'work': '作品合规',
+    'video': '作品合规',
+}
+
+
+def _normalize_category(log):
+    """归一化违规记录分类：缺失时回退 target_type，英文枚举映射为中文。"""
+    cat = str(log.get('category') or '').strip()
+    if not cat:
+        cat = str(log.get('target_type') or '').strip()
+    return CATEGORY_LABELS.get(cat, cat) or '未知'
+
+
+def _display_log(log):
+    """列表展示用副本：仅归一化旧数据英文分类，不污染缓存中的原始记录。"""
+    if not isinstance(log, dict):
+        return log
+    display = dict(log)
+    raw_cat = str(log.get('category') or '').strip()
+    if not raw_cat or raw_cat in CATEGORY_LABELS:
+        display['category'] = _normalize_category(log)
+    return display
+
 
 def _persist_rules(rules: list) -> None:
-    """Persist compliance rules to JSON file."""
-    from pathlib import Path
-    import json
-    rules_file = Path(__file__).parent.parent / 'data' / 'compliance_rules.json'
-    rules_file.parent.mkdir(parents=True, exist_ok=True)
+    """Persist compliance rules to JSON file (DATA_DIR/compliance_rules.json)。
+
+    与启动加载/规则管理同一路径，避免读写分叉导致规则重启后回退。
+    """
+    from services.fetcher import save_json_file
     try:
-        with open(rules_file, 'w', encoding='utf-8') as f:
-            json.dump(list(rules), f, ensure_ascii=False, indent=2)
+        save_json_file(COMPLIANCE_RULES_FILE, list(rules))
     except Exception as e:
         logger.warning(f"Failed to persist rules to file: {e}")
-
 
 def _sanitize_rule_payload(payload, *, partial=False):
     """Validate and normalize compliance rule mutation payloads."""
@@ -162,7 +193,7 @@ def get_compliance():
     end = start + size
 
     return success_response({
-        'items': logs[start:end],
+        'items': [_display_log(l) for l in logs[start:end]],
         'total': total,
         'page': page,
         'size': size
@@ -181,6 +212,7 @@ def ignore_compliance(item_id: str):
     log['ignored_at'] = datetime.now().isoformat()
     log['ignored_by'] = 'user'
     cache.set(CACHE_KEYS['compliance_logs'], logs)
+    _persist_compliance_logs(logs)
 
     return success_response(log, 'Compliance issue ignored')
 
@@ -197,6 +229,7 @@ def take_down_compliance(item_id: str):
     log['taken_down_at'] = datetime.now().isoformat()
     log['taken_down_by'] = 'user'
     cache.set(CACHE_KEYS['compliance_logs'], logs)
+    _persist_compliance_logs(logs)
 
     return success_response(log, 'Content taken down')
 
@@ -213,6 +246,7 @@ def restore_compliance(item_id: str):
     log['restored_at'] = datetime.now().isoformat()
     log['restored_by'] = 'user'
     cache.set(CACHE_KEYS['compliance_logs'], logs)
+    _persist_compliance_logs(logs)
 
     return success_response(log, 'Content restored')
 
@@ -230,12 +264,14 @@ def get_compliance_stats():
         'warning': len([l for l in logs if l.get('status') == 'warning']),
         'ignored': len([l for l in logs if l.get('status') == 'ignored']),
         'taken_down': len([l for l in logs if l.get('status') == 'taken_down']),
+        'error': len([l for l in logs if l.get('status') == 'error']),
         'by_category': {},
         'by_rule': {},
     }
 
     for log in logs:
-        cat = log.get('target_type', 'unknown')
+        # 分类维度归一化为中文（商品合规/作品合规）：新记录取自身 category，旧记录英文枚举映射
+        cat = _normalize_category(log)
         stats['by_category'][cat] = stats['by_category'].get(cat, 0) + 1
         rule = log.get('rule_id', 'unknown')
         stats['by_rule'][rule] = stats['by_rule'].get(rule, 0) + 1
@@ -273,12 +309,8 @@ def check_products():
     all enabled product rules against the combined data.
     Results are logged to compliance_items with target_type='product'.
     """
-    from services.fetcher import (
-        load_json_file, CACHE_KEYS as FK, fetch_haohuo_product_preview, PRODUCTS_FILE
-    )
-    from pathlib import Path
-    import json
-    
+    from services.fetcher import load_json_file, CACHE_KEYS as FK, PRODUCTS_FILE
+
     # 获取产品数据：优先从 Redis cache（与同步任务写入的 key 保持一致）
     products_data = cache.get(FK['products'], None)
     if products_data is None:
@@ -296,14 +328,11 @@ def check_products():
                 'haohuo_failed': 0
             })
     
-    # 获取已启用的规则，过滤 applicable_to 包含 'product' 的规则
+    # 获取已启用的规则：过滤适用商品目标的规则（applicable_to 缺失的旧规则默认适用全部目标，
+    # 与周期任务 fetch_and_check_compliance 同一口径）
     rules = _ensure_list(cache.get(CACHE_KEYS['compliance_rules'], []))
-    enabled_rules = [
-        r for r in rules 
-        if r.get('enabled', True) 
-        and 'product' in r.get('applicable_to', ['product'])  # 默认兼容旧规则
-    ]
-    
+    enabled_rules = filter_rules_for_target(rules, 'product')
+
     if not enabled_rules:
         return success_response({
             'status': 'no_rules',
@@ -313,132 +342,86 @@ def check_products():
             'haohuo_enriched': 0,
             'haohuo_failed': 0
         })
-    
+
     # 使用现有 rule_engine 进行检查
     engine = get_rule_engine()
     checked = 0
-    violations = []
+    violation_entries = []
     haohuo_enriched = 0
     haohuo_failed = 0
-    
+    # 规则 severity 映射：插件 outcome 多数不带 severity，由规则配置兜底传导到违规日志
+    rule_severity_map = {
+        (r.get('rule_id') or r.get('id')): (r.get('severity') or '')
+        for r in enabled_rules if isinstance(r, dict)
+    }
+
     for product in products_data:
         product_id = str(product.get('product_id') or product.get('id', ''))
         product_title = product.get('product_name') or product.get('title', '')
-        product_desc = product.get('description') or product.get('product_intro', '')
-        
+
         if not product_id:
             continue
-        
-        # 基础 target_data
+
+        # 基础 target_data（与周期任务同一构建口径）
         target_data = {
             'product_id': product_id,
             'product_title': product_title,
-            'description': product_desc,
+            'description': product.get('description') or product.get('product_intro', ''),
             'category_name': product.get('category_name', ''),
             'price': product.get('price', 0),
             # 保留原始商品完整数据，供规则引用
             '_raw_product': product,
         }
-        
-        # 自动拉取 Haohuo 预览数据并合并
-        try:
-            preview_data = fetch_haohuo_product_preview(product_id)
-            status_code = preview_data.get('status_code', 0)
-            
-            # 抖音接口约定 status_code=0 表示成功，兼容 HTTP 200
-            if status_code in (0, 200) and preview_data.get('detail_info'):
-                # 合并 Haohuo 数据到 target_data
-                # 保持原有字段，新增 haohuo_ 前缀字段避免冲突
-                target_data['haohuo_detail_info'] = preview_data.get('detail_info', {})
-                target_data['haohuo_extra'] = preview_data.get('extra', {})
-                target_data['haohuo_log_pb'] = preview_data.get('log_pb', {})
-                target_data['haohuo_status_code'] = status_code
-                haohuo_enriched += 1
-                logger.info(f"Enriched product {product_id} with Haohuo preview data")
-            else:
-                haohuo_failed += 1
-                logger.warning(f"Haohuo preview failed for product {product_id}: status_code={status_code}")
-                # 标记失败但不阻断检测
-                target_data['haohuo_status_code'] = status_code
-                target_data['haohuo_error'] = preview_data.get('status_msg', 'Unknown error')
-        except Exception as e:
+
+        # 自动拉取 Haohuo 预览数据并合并（公共增强器，失败不阻断检测）
+        enriched, haohuo_err = _enrich_product_with_haohuo(target_data, product_id)
+        if enriched:
+            haohuo_enriched += 1
+        if haohuo_err:
             haohuo_failed += 1
-            logger.error(f"Error fetching Haohuo preview for product {product_id}: {e}")
-            target_data['haohuo_status_code'] = -1
-            target_data['haohuo_error'] = str(e)
-        
+
         # 对每个规则进行检查
         outcomes = engine.check_all(enabled_rules, target_data, 'product', product_id)
-        
+
         for outcome in outcomes:
             checked += 1
-            if outcome.status == CheckResult.FAIL:
-                violations.append({
-                    'id': f"prod_{product_id}_{outcome.rule_id}_{int(datetime.now().timestamp())}",
-                    'target_type': 'product',
-                    'productId': product_id,
-                    'product_title': product_title,
-                    'keyword': outcome.matched_content or outcome.message,
-                    'category': outcome.details.get('category', '内容合规') if outcome.details else '内容合规',
-                    'risk_level': outcome.details.get('risk_level', outcome.severity if hasattr(outcome, 'severity') else 'MEDIUM'),
-                    'status': 'open',
-                    'rule_id': outcome.rule_id,
-                    'rule_name': outcome.rule_name,
-                    'checked_at': outcome.checked_at,
-                })
-    
-    # 落盘违规记录到 Redis cache (compliance_logs)
-    logs = _ensure_list(cache.get(CACHE_KEYS['compliance_logs'], DEFAULT_COMPLIANCE))
-    for v in violations:
-        v['created_at'] = datetime.now().isoformat()
-        v['updated_at'] = datetime.now().isoformat()
-        logs.append(v)
-    # 只保留最近 1000 条记录防止无限增长
-    logs = logs[-1000:]
-    cache.set(CACHE_KEYS['compliance_logs'], logs)
-    
+            status_val = outcome.status.value if hasattr(outcome.status, 'value') else str(outcome.status)
+            # 仅记录违规/告警（fail/warning/error），与周期任务口径一致
+            if status_val not in COMPLIANCE_LOG_STATUSES:
+                continue
+            violation_entries.append(build_compliance_log_entry(
+                target_type='product',
+                target_id=product_id,
+                target_name=product_title,
+                outcome=outcome,
+                category='商品合规',
+                severity=rule_severity_map.get(outcome.rule_id, ''),
+            ))
+
+    # 统一走 Redis + DATA_DIR/compliance.json 双写（与周期任务同一存储链路，
+    # 删除原 compliance_items.json 双轨死文件）
+    _append_compliance_logs(violation_entries)
+
     # 统计结果
-    stats = {
-        'status': 'completed',
-        'checked': checked,
-        'violations': len(violations),
-        'by_category': {},
-        'by_rule': {},
-    }
-    
-    for v in violations:
-        cat = v.get('category', '内容合规')
-        stats['by_category'][cat] = stats['by_category'].get(cat, 0) + 1
+    by_category = {}
+    by_rule = {}
+    for v in violation_entries:
+        cat = v.get('category', '商品合规')
+        by_category[cat] = by_category.get(cat, 0) + 1
         rule = v.get('rule_id', 'unknown')
-        stats['by_rule'][rule] = stats['by_rule'].get(rule, 0) + 1
-    
-    # 持久化违规记录到 JSON 文件 (备用存储)
-    logs_file = Path(__file__).parent.parent / 'data' / 'compliance_items.json'
-    logs_file.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        existing = []
-        if logs_file.exists():
-            with open(logs_file, 'r', encoding='utf-8') as f:
-                existing = json.load(f)
-        existing.extend(violations)
-        # 保留最近 500 条
-        existing = existing[-500:]
-        with open(logs_file, 'w', encoding='utf-8') as f:
-            json.dump(existing, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.warning(f"Failed to persist compliance items to file: {e}")
-    
+        by_rule[rule] = by_rule.get(rule, 0) + 1
+
     return success_response({
         'status': 'completed',
         'checked': checked,
-        'violations': len(violations),
+        'violations': len(violation_entries),
         'haohuo_enriched': haohuo_enriched,
         'haohuo_failed': haohuo_failed,
-        'by_category': stats['by_category'],
-        'by_rule': stats['by_rule'],
-        'message': f'Checked {checked} products ({haohuo_enriched} enriched with Haohuo, {haohuo_failed} Haohuo failed), found {len(violations)} violations'
+        'by_category': by_category,
+        'by_rule': by_rule,
+        'items': violation_entries,
+        'message': f'Checked {checked} rules ({haohuo_enriched} enriched with Haohuo, {haohuo_failed} Haohuo failed), found {len(violation_entries)} violations'
     })
-
 
 @compliance_bp.route('/compliance/check/works', methods=['POST'])
 def check_works():
@@ -449,8 +432,6 @@ def check_works():
     Results are logged to compliance_items with target_type='work'.
     """
     from services.fetcher import load_json_file, CACHE_KEYS as FK, CREATOR_WORKS_FILE
-    from pathlib import Path
-    import json
     
     # 获取作品数据：优先从 Redis cache
     works_data = cache.get(FK['creator_works'], None)
@@ -467,34 +448,35 @@ def check_works():
                 'violations': 0
             })
     
-    # 获取已启用的规则：仅 applicable_to 包含 'work' 的规则
+    # 获取已启用的规则：与商品检测同一口径过滤（applicable_to 缺失的旧规则默认适用全部目标）
     rules = _ensure_list(cache.get(CACHE_KEYS['compliance_rules'], []))
-    enabled_rules = [
-        r for r in rules 
-        if r.get('enabled', True) 
-        and 'work' in r.get('applicable_to', [])
-    ]
-    
+    enabled_rules = filter_rules_for_target(rules, 'work')
+
     if not enabled_rules:
         return success_response({
             'status': 'no_rules',
-            'message': 'No enabled compliance rules for works found. Create rules with applicable_to containing "work".',
+            'message': 'No enabled compliance rules for works found. Create rules first.',
             'checked': 0,
             'violations': 0
         })
-    
+
     # 使用现有 rule_engine 进行检查
     engine = get_rule_engine()
     checked = 0
-    violations = []
-    
+    violation_entries = []
+    # 规则 severity 映射：插件 outcome 多数不带 severity，由规则配置兜底传导到违规日志
+    rule_severity_map = {
+        (r.get('rule_id') or r.get('id')): (r.get('severity') or '')
+        for r in enabled_rules if isinstance(r, dict)
+    }
+
     for work in works_data:
         work_id = str(work.get('aweme_id') or work.get('id') or work.get('work_id', ''))
         work_title = work.get('title') or work.get('desc') or work.get('work_title', '')
-        
+
         if not work_id:
             continue
-        
+
         # 构建 target_data - 作品字段映射
         target_data = {
             'work_id': work_id,
@@ -510,91 +492,50 @@ def check_works():
             'statistics': work.get('statistics', {}),
             '_raw_work': work,
         }
-        
+
         # 对每个规则进行检查
         outcomes = engine.check_all(enabled_rules, target_data, 'work', work_id)
-        
+
         for outcome in outcomes:
             checked += 1
-            if outcome.status == CheckResult.FAIL:
-                violations.append({
-                    'id': f"work_{work_id}_{outcome.rule_id}_{int(datetime.now().timestamp())}",
-                    'target_type': 'work',
-                    'workId': work_id,
-                    'work_title': work_title[:100],
-                    'keyword': outcome.matched_content or outcome.message,
-                    'category': outcome.details.get('category', '作品合规') if outcome.details else '作品合规',
-                    'risk_level': outcome.details.get('risk_level', outcome.severity if hasattr(outcome, 'severity') else 'MEDIUM'),
-                    'status': 'open',
-                    'rule_id': outcome.rule_id,
-                    'rule_name': outcome.rule_name,
-                    'checked_at': outcome.checked_at,
-                })
-            elif outcome.status == CheckResult.WARNING:
-                violations.append({
-                    'id': f"work_{work_id}_{outcome.rule_id}_{int(datetime.now().timestamp())}",
-                    'target_type': 'work',
-                    'workId': work_id,
-                    'work_title': work_title[:100],
-                    'keyword': outcome.matched_content or outcome.message,
-                    'category': outcome.details.get('category', '作品合规') if outcome.details else '作品合规',
-                    'risk_level': 'MEDIUM',
-                    'status': 'warning',
-                    'rule_id': outcome.rule_id,
-                    'rule_name': outcome.rule_name,
-                    'checked_at': outcome.checked_at,
-                })
-    
-    # 落盘违规记录到 Redis cache (compliance_logs)
-    logs = _ensure_list(cache.get(CACHE_KEYS['compliance_logs'], DEFAULT_COMPLIANCE))
-    for v in violations:
-        v['created_at'] = datetime.now().isoformat()
-        v['updated_at'] = datetime.now().isoformat()
-        logs.append(v)
-    logs = logs[-1000:]
-    cache.set(CACHE_KEYS['compliance_logs'], logs)
-    
+            status_val = outcome.status.value if hasattr(outcome.status, 'value') else str(outcome.status)
+            # 仅记录违规/告警（fail/warning/error），统一口径
+            if status_val not in COMPLIANCE_LOG_STATUSES:
+                continue
+            violation_entries.append(build_compliance_log_entry(
+                target_type='work',
+                target_id=work_id,
+                target_name=work_title[:100],
+                outcome=outcome,
+                category='作品合规',
+                severity=rule_severity_map.get(outcome.rule_id, ''),
+            ))
+
+    # 统一走 Redis + DATA_DIR/compliance.json 双写
+    _append_compliance_logs(violation_entries)
+
     # 统计结果
-    stats = {
-        'status': 'completed',
-        'checked': checked,
-        'violations': len([v for v in violations if v.get('status') == 'open']),
-        'warnings': len([v for v in violations if v.get('status') == 'warning']),
-        'by_category': {},
-        'by_rule': {},
-    }
-    
-    for v in violations:
+    by_category = {}
+    by_rule = {}
+    for v in violation_entries:
         cat = v.get('category', '作品合规')
-        stats['by_category'][cat] = stats['by_category'].get(cat, 0) + 1
+        by_category[cat] = by_category.get(cat, 0) + 1
         rule = v.get('rule_id', 'unknown')
-        stats['by_rule'][rule] = stats['by_rule'].get(rule, 0) + 1
-    
-    # 持久化违规记录到 JSON 文件
-    logs_file = Path(__file__).parent.parent / 'data' / 'compliance_items.json'
-    logs_file.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        existing = []
-        if logs_file.exists():
-            with open(logs_file, 'r', encoding='utf-8') as f:
-                existing = json.load(f)
-        existing.extend(violations)
-        existing = existing[-500:]
-        with open(logs_file, 'w', encoding='utf-8') as f:
-            json.dump(existing, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.warning(f"Failed to persist compliance items to file: {e}")
-    
+        by_rule[rule] = by_rule.get(rule, 0) + 1
+
+    fail_count = len([v for v in violation_entries if v.get('status') == 'fail'])
+    warning_count = len([v for v in violation_entries if v.get('status') == 'warning'])
+
     return success_response({
         'status': 'completed',
         'checked': checked,
-        'violations': stats['violations'],
-        'warnings': stats['warnings'],
-        'by_category': stats['by_category'],
-        'by_rule': stats['by_rule'],
-        'message': f'Checked {checked} works, found {stats["violations"]} violations, {stats["warnings"]} warnings'
+        'violations': fail_count,
+        'warnings': warning_count,
+        'by_category': by_category,
+        'by_rule': by_rule,
+        'items': violation_entries,
+        'message': f'Checked {checked} rules, found {fail_count} violations, {warning_count} warnings'
     })
-
 
 # Compliance Rules endpoints
 @compliance_bp.route('/compliance/rules', methods=['GET'])
@@ -632,14 +573,8 @@ def create_compliance_rule():
     rules.insert(0, rule)
     cache.set(CACHE_KEYS['compliance_rules'], rules)
     
-    # 同步持久化到 JSON 文件（跨容器重启生效）
-    rules_file = Path(__file__).parent.parent / 'data' / 'compliance_rules.json'
-    rules_file.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with open(rules_file, 'w', encoding='utf-8') as f:
-            json.dump(list(rules), f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.warning(f"Failed to persist rule to file: {e}")
+    # 同步持久化到 JSON 文件（跨容器重启生效，DATA_DIR 统一路径）
+    _persist_rules(rules)
 
     return success_response(rule, 'Compliance rule created', 201)
 
@@ -692,19 +627,22 @@ def refresh_compliance_cache():
     Useful when JSON files have been updated but cache still contains stale data.
     """
     from services.fetcher import cache, CACHE_KEYS, load_json_file
-    from pathlib import Path
-
     # 重新加载规则到缓存（load_json_file 要求 Path 对象，不能传 str）
-    rules_file = Path(__file__).parent.parent / 'data' / 'compliance_rules.json'
+    # 同时补齐缺失的好货规则，保证刷新后检测链路完整
+    rules_file = COMPLIANCE_RULES_FILE
     if rules_file.exists():
         rules = load_json_file(rules_file, [], model_type='compliance_rules')
-        cache.set(CACHE_KEYS['compliance_rules'], rules)
-        logger.info(f"Refreshed {len(rules)} compliance rules from file")
+        merged_rules, added_ids = ensure_haohuo_rules(rules)
+        if added_ids:
+            logger.warning(f"Haohuo rules missing on refresh, auto-added: {added_ids}")
+            _persist_rules(merged_rules)
+        cache.set(CACHE_KEYS['compliance_rules'], merged_rules)
+        logger.info(f"Refreshed {len(merged_rules)} compliance rules from file")
     else:
         logger.warning("compliance_rules.json not found, keeping existing cache")
 
     # 重新加载日志到缓存
-    logs_file = Path(__file__).parent.parent / 'data' / 'compliance.json'
+    logs_file = COMPLIANCE_FILE
     if logs_file.exists():
         logs = load_json_file(logs_file, [])
         cache.set(CACHE_KEYS['compliance_logs'], logs)
