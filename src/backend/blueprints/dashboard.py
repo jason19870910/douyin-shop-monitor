@@ -1,6 +1,7 @@
 """Dashboard blueprint."""
 from flask import Blueprint, request
 from services.fetcher import cache, CACHE_KEYS, get_data_with_fallback, MOCK_PRODUCTS, MOCK_ORDERS, MOCK_CREATORS, get_mock_status
+from utils.order_normalizer import normalize_orders
 from datetime import datetime
 from utils.responses import success_response
 import requests
@@ -169,6 +170,8 @@ def get_dashboard_stats():
     """Get dashboard statistics."""
     products = cache.get(CACHE_KEYS['products'], [])
     orders = cache.get(CACHE_KEYS['orders'], [])
+    # 抖店订单原始字段 → 平台标准字段（金额分→元、时间 Unix 秒→ISO、状态码→标准状态）
+    orders = normalize_orders(orders)
     creators = cache.get(CACHE_KEYS['creators'], [])
     videos = cache.get(CACHE_KEYS['videos'], [])
 

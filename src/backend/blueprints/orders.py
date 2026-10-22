@@ -3,6 +3,7 @@ from flask import Blueprint, request
 from services.fetcher import cache, CACHE_KEYS, get_data_with_fallback, MOCK_ORDERS
 from config import Config
 from services.fetcher import _request
+from utils.order_normalizer import normalize_orders
 from utils.responses import success_response
 
 orders_bp = Blueprint('orders', __name__, url_prefix='/api/v1')
@@ -18,7 +19,10 @@ def get_orders():
     status_filter = request.args.get('status')
     
     orders, data_source = get_data_with_fallback('orders', MOCK_ORDERS)
-    
+
+    # 抖店订单原始字段 → 平台标准字段（前端表格直接消费）
+    orders = normalize_orders(orders)
+
     # 过滤时间范围
     if start_date:
         orders = [o for o in orders if o.get('create_time', '') >= start_date]
