@@ -1,10 +1,16 @@
 """Videos blueprint."""
 from flask import Blueprint, request
-from services.fetcher import cache, CACHE_KEYS, DEFAULT_VIDEOS
+from services.fetcher import cache, CACHE_KEYS, DEFAULT_VIDEOS, VIDEOS_FILE, save_json_file
 from datetime import datetime
 from utils.responses import success_response, not_found_response, bad_request_response
 
 videos_bp = Blueprint('videos', __name__, url_prefix='/api/v1')
+
+
+def _persist_videos(videos: list) -> None:
+    """双写视频数据：Redis 持久化（无 TTL）+ JSON 文件，避免缓存过期后丢失。"""
+    cache.set(CACHE_KEYS['videos'], videos, ttl=None)
+    save_json_file(VIDEOS_FILE, videos)
 
 
 @videos_bp.route('/videos', methods=['GET'])
@@ -75,7 +81,7 @@ def create_video():
     
     videos = cache.get(CACHE_KEYS['videos'], DEFAULT_VIDEOS)
     videos.insert(0, video)
-    cache.set(CACHE_KEYS['videos'], videos)
+    _persist_videos(videos)
     
     return success_response(video, 'Video created', 201)
 
@@ -100,7 +106,7 @@ def update_video(video_id: str):
         'update_time': datetime.now().isoformat()
     })
     
-    cache.set(CACHE_KEYS['videos'], videos)
+    _persist_videos(videos)
     return success_response(video, 'Video updated')
 
 
@@ -113,5 +119,5 @@ def delete_video(video_id: str):
         return not_found_response('Video')
     
     videos = [v for v in videos if v.get('video_id') != video_id]
-    cache.set(CACHE_KEYS['videos'], videos)
+    _persist_videos(videos)
     return success_response(None, 'Video deleted')

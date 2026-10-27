@@ -280,7 +280,7 @@ def save_json_file(file_path: Path, data: Any) -> None:
     try:
         file_path = Path(file_path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = file_path.with_name(file_path.name + '.tmp')
+        tmp_path = file_path.with_name(f"{file_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
             f.flush()
@@ -608,6 +608,10 @@ def _fetch_creators_from_api() -> List[Dict[str, Any]]:
     
     Per API spec: Creator center MUST use cookies dict parameter (requests cookies=),
     NOT Cookie header string. Parse cookie string to dict first.
+    
+    Returns list of creators with fields matching frontend Creator interface:
+    creator_id, nickname, creator_name, follower_count, total_sales,
+    total_revenue, product_count, avg_conversion_rate, fetched_at, avatar
     """
     logger.info("Fetching creators from external Creator API...")
     
@@ -637,7 +641,19 @@ def _fetch_creators_from_api() -> List[Dict[str, Any]]:
     # 外部 API 返回 metrics 数组，需解析映射到 creators 列表格式
     # 兼容旧格式：data.creators 以及新格式：metrics 数组
     if 'creators' in result.get('data', {}):
-        return result['data']['creators']
+        creators = result['data']['creators']
+        # Ensure each creator has all required fields for frontend
+        for c in creators:
+            c.setdefault('creator_id', c.get('id', ''))
+            c.setdefault('nickname', c.get('creator_name', c.get('name', '')))
+            c.setdefault('follower_count', c.get('followers', 0))
+            c.setdefault('total_sales', 0)
+            c.setdefault('total_revenue', 0)
+            c.setdefault('product_count', 0)
+            c.setdefault('avg_conversion_rate', 0.0)
+            c.setdefault('fetched_at', datetime.now().isoformat())
+            c.setdefault('avatar', '')
+        return creators
     
     metrics = result.get('metrics') or result.get('data', {}).get('metrics', [])
     if not metrics:
@@ -645,14 +661,38 @@ def _fetch_creators_from_api() -> List[Dict[str, Any]]:
     
     # 将 metrics 数组转换为单个 creator 信息 dict
     metric_map = {m.get('english_metric_name'): m.get('metric_value', 0) for m in metrics}
+    total_followers = _metric_value(metric_map, 'total_followers')
+    total_videos = _metric_value(metric_map, 'total_videos')
+    
+    # 尝试从 author 字段获取昵称和头像（如果 API 返回包含 author 信息）
+    author = result.get('data', {}).get('author', {})
+    nickname = author.get('nickname', '抖音创作者')
+    avatar = ''
+    if author.get('avatar_thumb', {}).get('url_list'):
+        avatar = author['avatar_thumb']['url_list'][0]
+    elif author.get('avatar_medium', {}).get('url_list'):
+        avatar = author['avatar_medium']['url_list'][0]
+    elif author.get('avatar_larger', {}).get('url_list'):
+        avatar = author['avatar_larger']['url_list'][0]
+    
+    # 构造符合前端 Creator 接口的结构
     creator_info = {
-        'total_followers'    : _metric_value(metric_map, 'total_followers'),
-        'total_videos'       : _metric_value(metric_map, 'total_videos'),
-        'total_views'        : _metric_value(metric_map, 'total_views'),
-        'total_likes'        : _metric_value(metric_map, 'total_likes'),
-        'total_comments'     : _metric_value(metric_map, 'total_comments'),
-        'total_shares'       : _metric_value(metric_map, 'total_shares'),
+        'creator_id': author.get('sec_uid', author.get('uid', 'main_account')),
+        'nickname': nickname,
+        'creator_name': nickname,
+        'follower_count': total_followers,
+        'total_sales': 0,          # 该 API 不提供销售数据，默认 0
+        'total_revenue': 0,        # 该 API 不提供收入数据，默认 0
+        'product_count': 0,        # 该 API 不提供商品数，默认 0
+        'avg_conversion_rate': 0.0, # 该 API 不提供转化率，默认 0
+        'total_videos': total_videos,
+        'total_views': _metric_value(metric_map, 'total_views'),
+        'total_likes': _metric_value(metric_map, 'total_likes'),
+        'total_comments': _metric_value(metric_map, 'total_comments'),
+        'total_shares': _metric_value(metric_map, 'total_shares'),
         'recent_followers_gain': _metric_value(metric_map, 'recent_followers_gain'),
+        'fetched_at': datetime.now().isoformat(),
+        'avatar': avatar,
     }
     return [creator_info]
 
@@ -788,6 +828,68 @@ def fetch_and_store_creators() -> Dict[str, Any]:
 
 # ==================== Creator Works Fetching ====================
 
+def _transform_aweme_to_work(aweme: Dict[str, Any]) -> Dict[str, Any]:
+    """Transform raw aweme item from Creator API to frontend CreatorWork format.
+    
+    Frontend expects: work_id, cover_url, title, play_count, like_count,
+    comment_count, share_count, status (1-4), create_time (ISO string)
+    """
+    # Extract statistics
+    stats = aweme.get('statistics', {})
+    
+    # Extract author info for creator_name
+    author = aweme.get('author', {})
+    creator_name = author.get('nickname', '')
+    
+    # Extract cover URL from video.cover.url_list
+    cover_url = ''
+    video = aweme.get('video', {})
+    if video.get('cover', {}).get('url_list'):
+        cover_url = video['cover']['url_list'][0]
+    elif video.get('origin_cover', {}).get('url_list'):
+        cover_url = video['origin_cover']['url_list'][0]
+    elif video.get('dynamic_cover', {}).get('url_list'):
+        cover_url = video['dynamic_cover']['url_list'][0]
+    
+    # Extract title/desc
+    title = aweme.get('desc') or aweme.get('item_title') or aweme.get('caption') or ''
+    
+    # Extract status - map from aweme status_value or review status
+    # status_value: 102 = normal, other values may indicate review/ban
+    status_value = aweme.get('status_value', 102)
+    if status_value == 102:
+        status = 1  # 正常
+    elif aweme.get('status', {}).get('is_delete'):
+        status = 4  # 已删除
+    elif aweme.get('status', {}).get('in_reviewing'):
+        status = 2  # 审核中
+    elif aweme.get('status', {}).get('is_prohibited'):
+        status = 3  # 违规/禁止
+    else:
+        status = 1
+    
+    # Convert create_time from unix timestamp to ISO string
+    create_time = aweme.get('create_time')
+    if isinstance(create_time, (int, float)):
+        create_time_iso = datetime.fromtimestamp(create_time).isoformat()
+    else:
+        create_time_iso = datetime.now().isoformat()
+    
+    return {
+        'work_id': str(aweme.get('aweme_id', aweme.get('item_id', ''))),
+        'cover_url': cover_url,
+        'title': title[:200] if title else '',  # Limit title length
+        'play_count': stats.get('play_count', 0),
+        'like_count': stats.get('digg_count', 0),
+        'comment_count': stats.get('comment_count', 0),
+        'share_count': stats.get('forward_count', 0),
+        'status': status,
+        'create_time': create_time_iso,
+        'fetched_at': datetime.now().isoformat(),
+        'creator_name': creator_name,
+    }
+
+
 @_http_retry(max_retries=3, base_delay=1.0, max_delay=10.0)
 def _fetch_creator_works_from_api(recent_days: int = None) -> List[Dict[str, Any]]:
     """Fetch creator works from external Creator API.
@@ -797,6 +899,9 @@ def _fetch_creator_works_from_api(recent_days: int = None) -> List[Dict[str, Any
 
     Args:
         recent_days: 可选，仅保留最近 N 天内发布的作品（按 create_time unix 时间戳过滤）
+    
+    Returns:
+        List of works in frontend CreatorWork format
     """
     logger.info("Fetching creator works from external Creator API...")
     
@@ -830,20 +935,23 @@ def _fetch_creator_works_from_api(recent_days: int = None) -> List[Dict[str, Any
     result = resp.json()
     
     # 兼容不同的返回结构：aweme_list / data / works
-    works = result.get('aweme_list') or result.get('items') or []
-    if isinstance(works, dict):
-        works = works.get('works', [])
+    raw_works = result.get('aweme_list') or result.get('items') or []
+    if isinstance(raw_works, dict):
+        raw_works = raw_works.get('works', [])
 
     # 按 recent_days 过滤（create_time 为 unix 秒时间戳）
     if recent_days:
         cutoff = datetime.now().timestamp() - recent_days * 86400
         filtered = []
-        for w in works:
+        for w in raw_works:
             ct = w.get('create_time')
             if isinstance(ct, (int, float)) and ct >= cutoff:
                 filtered.append(w)
-        works = filtered
-    return works
+        raw_works = filtered
+    
+    # Transform each aweme to frontend CreatorWork format
+    transformed_works = [_transform_aweme_to_work(w) for w in raw_works]
+    return transformed_works
 
 
 def fetch_and_store_creator_works() -> Dict[str, Any]:
@@ -851,10 +959,7 @@ def fetch_and_store_creator_works() -> Dict[str, Any]:
     try:
         works = _fetch_creator_works_from_api()
         
-        # Transform and store
-        for work in works:
-            work['fetched_at'] = datetime.now().isoformat()
-        
+        # Works already have fetched_at from transformation
         # Store in Redis cache
         cache.set(CACHE_KEYS['creator_works'], works)
         # Also save to JSON file for persistence
@@ -954,6 +1059,60 @@ def _load_videos_from_file() -> List[Dict[str, Any]]:
     return []
 
 
+def _fetch_creator_works_raw_from_api(recent_days: int = None) -> List[Dict[str, Any]]:
+    """Fetch raw creator works from external Creator API (untransformed aweme format).
+    
+    This is used by the videos pipeline which needs the raw aweme structure.
+    """
+    logger.info("Fetching raw creator works from external Creator API for videos pipeline...")
+    
+    endpoint = Config.CREATOR_WORK_LIST_URL
+    params = {
+        'status': '0',
+        'count': '12',
+        'max_cursor': '0',
+        'scene': 'star_atlas',
+        'device_platform': 'android',
+        'aid': Config.CREATOR_WORK_AID,
+    }
+    cookie_str = os.getenv('CREATOR_COOKIES', '')
+    
+    # Parse cookie string to dict (required for creator.douyin.com endpoints)
+    cookies = {}
+    if cookie_str:
+        for pair in cookie_str.split(';'):
+            if '=' in pair:
+                k, v = pair.strip().split('=', 1)
+                cookies[k] = v
+    
+    headers = {
+        'User-Agent': Config.USER_AGENT,
+        'Referer': 'https://creator.douyin.com/creator-micro/content/manage',
+        'Accept': 'application/json, text/plain, */*',
+    }
+    
+    resp = requests.get(endpoint, params=params, headers=headers, cookies=cookies, timeout=30)
+    resp.raise_for_status()
+    result = resp.json()
+    
+    # 兼容不同的返回结构：aweme_list / data / works
+    raw_works = result.get('aweme_list') or result.get('items') or []
+    if isinstance(raw_works, dict):
+        raw_works = raw_works.get('works', [])
+
+    # 按 recent_days 过滤（create_time 为 unix 秒时间戳）
+    if recent_days:
+        cutoff = datetime.now().timestamp() - recent_days * 86400
+        filtered = []
+        for w in raw_works:
+            ct = w.get('create_time')
+            if isinstance(ct, (int, float)) and ct >= cutoff:
+                filtered.append(w)
+        raw_works = filtered
+    
+    return raw_works
+
+
 def fetch_and_store_videos() -> Dict[str, Any]:
     """Fetch videos from Creator works API, transform to flat schema, store in Redis + JSON file.
 
@@ -962,8 +1121,9 @@ def fetch_and_store_videos() -> Dict[str, Any]:
       2. API 失败或返回空时：保留现有缓存/历史文件不动，不生成假数据
     """
     try:
-        works = _fetch_creator_works_from_api()
-        videos = [v for v in (_transform_work_to_video(w) for w in works) if v]
+        # Use raw aweme data for video transformation
+        raw_works = _fetch_creator_works_raw_from_api()
+        videos = [v for v in (_transform_work_to_video(w) for w in raw_works) if v]
 
         if not videos:
             raise ValueError('Creator works API returned no transformable videos')
@@ -1964,7 +2124,8 @@ def save_alert_to_history(alert: Dict[str, Any]) -> None:
     # Keep only last 500 alerts to avoid memory bloat
     if len(history) > 500:
         history = history[:500]
-    cache.set(CACHE_KEYS['alert_history'], history)
+    # 持久化写入（无 TTL）：告警历史不应在 1 小时后随缓存过期而被清空
+    cache.set(CACHE_KEYS['alert_history'], history, ttl=None)
 
 
 def get_alert_history(
@@ -1997,7 +2158,8 @@ def clear_alert_history() -> int:
     """Clear all alert history. Returns count of cleared alerts."""
     history = cache.get(CACHE_KEYS['alert_history'], [])
     count = len(history) if isinstance(history, list) else 0
-    cache.set(CACHE_KEYS['alert_history'], [])
+    # 清空结果同样持久化（无 TTL），避免过期后读到默认值
+    cache.set(CACHE_KEYS['alert_history'], [], ttl=None)
     return count
 
 
@@ -2100,7 +2262,7 @@ def save_all_data() -> None:
     save_json_file(COMPLIANCE_RULES_FILE, cache.get(CACHE_KEYS['compliance_rules'], []))
     save_json_file(COMPLIANCE_FILE, cache.get(CACHE_KEYS['compliance_logs'], []))
     save_json_file(MEDIA_FILE, cache.get(CACHE_KEYS['media'], []))
-    save_json_file(AUTH_FILE, cache.get(CACHE_KEYS['auth'], []))
+    save_json_file(AUTH_FILE, get_config('auth_config'))
     save_json_file(CREATOR_WORKS_FILE, cache.get(CACHE_KEYS['creator_works'], []))
     save_json_file(ALERT_CONFIG_FILE, cache.get(CACHE_KEYS['alert_config'], {}))
     save_json_file(ALERT_DOUYIN_CONFIG_FILE, cache.get(CACHE_KEYS['alert_douyin_config'], {}))

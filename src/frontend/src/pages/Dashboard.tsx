@@ -111,9 +111,7 @@ const Dashboard = () => {
         </Col>
         <Col xs={24} lg={12}>
           <Card title="热销商品 TOP 10" loading={dashboardStatsLoading}>
-            {dashboardStatsError ? <Empty description="加载失败" /> : dashboardStats?.top_products && dashboardStats.top_products.length > 0 ? (
-              <DataTable<Product> title="热销商品 TOP 10" queryKey={queryKeys.dashboard.stats({})} queryFn={(params) => dashboardApi.getStats(params).then(res => ({ items: res?.top_products || [], total: res?.top_products?.length || 0 })) as Promise<{ items: Product[]; total: number }>} columns={hotProductColumns} rowKey="product_id" defaultPageSize={10} exportConfig={{ filenamePrefix: 'dashboard_hot_products', columns: [{ key: 'rank', label: '排名' }, { key: 'product_id', label: '商品ID' }, { key: 'product_name', label: '商品名称' }, { key: 'price_lower', label: '价格', render: (record: Product) => ((record.price_lower ?? record.price_higher ?? record.market_price ?? 0) as number) / 100 }, { key: 'sales_today', label: '今日销量' }, { key: 'sales_yesterday', label: '昨日销量' }, { key: 'inventory', label: '库存' }, { key: 'conversion_rate', label: '转化率' }, { key: 'fetched_at', label: '更新时间' }] }} />
-            ) : <Empty description="暂无热销商品数据" />}
+            <DataTable<Product> title="热销商品 TOP 10" queryKey={queryKeys.dashboard.stats({})} queryFn={(params) => dashboardApi.getStats(params).then(res => ({ items: res?.top_products || [], total: res?.top_products?.length || 0 })) as Promise<{ items: Product[]; total: number }>} columns={hotProductColumns} rowKey="product_id" defaultPageSize={10} exportConfig={{ filenamePrefix: 'dashboard_hot_products', columns: [{ key: 'rank', label: '排名' }, { key: 'product_id', label: '商品ID' }, { key: 'product_name', label: '商品名称' }, { key: 'price_lower', label: '价格', render: (record: Product) => ((record.price_lower ?? record.price_higher ?? record.market_price ?? 0) as number) / 100 }, { key: 'sales_today', label: '今日销量' }, { key: 'sales_yesterday', label: '昨日销量' }, { key: 'inventory', label: '库存' }, { key: 'conversion_rate', label: '转化率' }, { key: 'fetched_at', label: '更新时间' }] }} />
           </Card>
         </Col>
       </Row>

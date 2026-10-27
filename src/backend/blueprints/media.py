@@ -1,10 +1,16 @@
 """Media blueprint."""
 from flask import Blueprint, request
-from services.fetcher import cache, CACHE_KEYS, DEFAULT_MEDIA
+from services.fetcher import cache, CACHE_KEYS, DEFAULT_MEDIA, MEDIA_FILE, save_json_file
 from datetime import datetime
 from utils.responses import success_response, not_found_response, bad_request_response
 
 media_bp = Blueprint('media', __name__, url_prefix='/api/v1')
+
+
+def _persist_media(media_list: list) -> None:
+    """双写媒体数据：Redis 持久化（无 TTL）+ JSON 文件，避免缓存过期后丢失。"""
+    cache.set(CACHE_KEYS['media'], media_list, ttl=None)
+    save_json_file(MEDIA_FILE, media_list)
 
 
 @media_bp.route('/media/video-edit', methods=['GET'])
@@ -43,7 +49,7 @@ def create_media():
     
     media_list = cache.get(CACHE_KEYS['media'], DEFAULT_MEDIA)
     media_list.insert(0, media)
-    cache.set(CACHE_KEYS['media'], media_list)
+    _persist_media(media_list)
     
     return success_response(media, 'Media created', 201)
 
@@ -68,7 +74,7 @@ def update_media(media_id: str):
         'update_time': datetime.now().isoformat()
     })
     
-    cache.set(CACHE_KEYS['media'], media_list)
+    _persist_media(media_list)
     return success_response(media, 'Media updated')
 
 
@@ -82,5 +88,5 @@ def delete_media(media_id: str):
     if len(media_list) == original_len:
         return not_found_response('Media')
     
-    cache.set(CACHE_KEYS['media'], media_list)
+    _persist_media(media_list)
     return success_response(None, 'Media deleted')

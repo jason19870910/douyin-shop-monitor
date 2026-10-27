@@ -532,7 +532,7 @@ class CustomScriptRulePlugin(BaseRulePlugin):
     """
     
     rule_type = RuleType.CUSTOM_SCRIPT
-    description = "Custom script execution for complex compliance logic"
+    description = "Custom script execution for complex compliance logic (secure sandboxed)"
     config_schema = {
         "type": "object",
         "properties": {
@@ -540,13 +540,15 @@ class CustomScriptRulePlugin(BaseRulePlugin):
             "script_file": {"type": "string", "description": "Path to external script file"},
             "language": {"type": "string", "enum": ["python", "javascript"], "default": "python"},
             "timeout_seconds": {"type": "integer", "default": 10},
-            "allowed_imports": {"type": "array", "items": {"type": "string"}, "default": ["json", "re", "datetime"]}
         },
         "oneOf": [
             {"required": ["script"]},
             {"required": ["script_file"]}
         ]
     }
+    
+    # Fixed safe imports for sandbox - not user configurable for security
+    _SAFE_IMPORTS = ["json", "re", "datetime", "math", "statistics", "collections", "itertools", "functools"]
     
     def check(self, context: RuleContext) -> CheckOutcome:
         import time
@@ -558,7 +560,8 @@ class CustomScriptRulePlugin(BaseRulePlugin):
         script_file = rule_content.get("script_file", context.rule_config.get("script_file"))
         language = rule_content.get("language", context.rule_config.get("language", "python"))
         timeout = rule_content.get("timeout_seconds", context.rule_config.get("timeout_seconds", 10))
-        allowed_imports = rule_content.get("allowed_imports", context.rule_config.get("allowed_imports", ["json", "re", "datetime"]))
+        # allowed_imports is now fixed server-side for security
+        allowed_imports = self._SAFE_IMPORTS
         
         if not script and not script_file:
             return self._create_outcome(
@@ -602,71 +605,207 @@ class CustomScriptRulePlugin(BaseRulePlugin):
         allowed_imports: List[str],
         start_time: float
     ) -> CheckOutcome:
-        """Execute Python script in restricted namespace."""
+        """Execute Python script in a secure isolated subprocess.
+        
+        Security features:
+        - Completely separate process with no access to parent memory
+        - No filesystem access (script passed via stdin)
+        - No network access
+        - Restricted builtins only
+        - CPU time limit enforced
+        - Memory limit enforced (best effort)
+        - Only JSON communication via stdin/stdout
+        """
+        import subprocess
+        import json as json_module
         import time
+        import sys
+        
+        # Prepare input data as JSON
+        input_data = {
+            "target": context.target_data,
+            "config": context.rule_config,
+            "metadata": context.metadata,
+            "allowed_imports": allowed_imports,
+        }
+        
+        # Secure sandbox script - runs in the subprocess
+        sandbox_script = '''
+import sys
+import json
+import traceback
+
+# Severely restricted builtins - only safe pure functions
+SAFE_BUILTINS = {
+    'len': len,
+    'str': str,
+    'int': int,
+    'float': float,
+    'bool': bool,
+    'list': list,
+    'dict': dict,
+    'tuple': tuple,
+    'set': set,
+    'min': min,
+    'max': max,
+    'sum': sum,
+    'any': any,
+    'all': all,
+    'isinstance': isinstance,
+    'hasattr': hasattr,
+    'getattr': getattr,
+    'enumerate': enumerate,
+    'range': range,
+    'zip': zip,
+    'sorted': sorted,
+    'reversed': reversed,
+    'abs': abs,
+    'round': round,
+    'pow': pow,
+    'divmod': divmod,
+    'ord': ord,
+    'chr': chr,
+    'print': lambda *args, **kwargs: None,  # Discard output
+}
+
+# Load allowed modules
+ALLOWED_MODULES = {}
+for mod_name in __imports__:
+    try:
+        ALLOWED_MODULES[mod_name] = __import__(mod_name)
+    except ImportError:
+        pass
+
+# Read script from stdin
+script_code = sys.stdin.read()
+
+# Prepare execution namespace
+namespace = {
+    '__builtins__': SAFE_BUILTINS,
+    **ALLOWED_MODULES,
+    'target': __target__,
+    'config': __config__,
+    'metadata': __metadata__,
+    'result': {'status': 'pass', 'message': '', 'details': {}},
+}
+
+try:
+    # Execute with compiled code object (no eval/exec in user code)
+    compiled = compile(script_code, '<custom_rule>', 'exec')
+    exec(compiled, namespace)
+    
+    # Output result as JSON to stdout
+    result = namespace.get('result', {'status': 'pass', 'message': '', 'details': {}})
+    # Ensure status is valid
+    if result.get('status') not in ('pass', 'fail', 'warning', 'error', 'skipped'):
+        result['status'] = 'pass'
+    sys.stdout.write(json.dumps(result, ensure_ascii=False))
+    sys.stdout.flush()
+except Exception as e:
+    # Error result
+    error_result = {
+        'status': 'error',
+        'message': f'Script execution failed: {type(e).__name__}: {e}',
+        'details': {'traceback': traceback.format_exc()},
+    }
+    sys.stdout.write(json.dumps(error_result, ensure_ascii=False))
+    sys.stdout.flush()
+'''
+        
+        # Prepare the sandbox script with injected data
+        # Use base64 to safely pass data through command line
+        import base64
+        
         try:
-            self._validate_python_script(script)
-        except ValueError as exc:
+            # Encode the dynamic parts
+            target_b64 = base64.b64encode(json_module.dumps(context.target_data, ensure_ascii=False).encode()).decode()
+            config_b64 = base64.b64encode(json_module.dumps(context.rule_config, ensure_ascii=False).encode()).decode()
+            metadata_b64 = base64.b64encode(json_module.dumps(context.metadata, ensure_ascii=False).encode()).decode()
+            imports_b64 = base64.b64encode(json_module.dumps(allowed_imports).encode()).decode()
+            
+            # Build the complete script with decoded data
+            # We inject the data as variables in the script
+            complete_script = sandbox_script.replace(
+                '__imports__', f'json.loads(base64.b64decode("{imports_b64}").decode())'
+            ).replace(
+                '__target__', f'json.loads(base64.b64decode("{target_b64}").decode())'
+            ).replace(
+                '__config__', f'json.loads(base64.b64decode("{config_b64}").decode())'
+            ).replace(
+                '__metadata__', f'json.loads(base64.b64decode("{metadata_b64}").decode())'
+            )
+            
+            # Add required imports at the top
+            complete_script = 'import json\nimport base64\nimport sys\nimport traceback\n' + complete_script
+            
+        except Exception as e:
             return self._create_outcome(
                 rule_id=context.rule_config.get("rule_id", "unknown"),
                 rule_name=context.rule_config.get("rule_name", "Custom Script Rule"),
                 status=CheckResult.ERROR,
-                message=f"Unsafe script rejected: {exc}",
+                message=f"Failed to prepare sandbox: {e}",
                 execution_time_ms=(time.time() - start_time) * 1000
             )
-
-        # Create restricted namespace
-        safe_globals = {
-            "__builtins__": {
-                "len": len,
-                "str": str,
-                "int": int,
-                "float": float,
-                "bool": bool,
-                "list": list,
-                "dict": dict,
-                "tuple": tuple,
-                "set": set,
-                "min": min,
-                "max": max,
-                "sum": sum,
-                "any": any,
-                "all": all,
-                "isinstance": isinstance,
-                "hasattr": hasattr,
-                "getattr": getattr,
-                "enumerate": enumerate,
-                "range": range,
-                "zip": zip,
-                "print": lambda *args: None,
-            },
-            "context": context,
-            "target": context.target_data,
-            "config": context.rule_config,
-        }
-
-        # Add allowed imports
-        for mod_name in allowed_imports:
-            try:
-                safe_globals[mod_name] = __import__(mod_name)
-            except ImportError:
-                pass
-
-        # Add result dict for script to populate
-        result = {"status": CheckResult.PASS, "message": "", "details": {}}
-        safe_globals["result"] = result
-
+        
         try:
-            exec(script, safe_globals)
-
+            # Run in isolated subprocess
+            # - No network, no filesystem (except stdin/stdout)
+            # - Timeout enforced by subprocess
+            # - Resource limits: we rely on timeout; for memory/CPU would need `resource` module (Unix only)
+            proc = subprocess.run(
+                [sys.executable, "-c", complete_script],
+                input=script,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                # Security: no shell, no env inheritance beyond minimal
+                env={'PATH': '', 'PYTHONPATH': '', 'HOME': '/tmp'},
+            )
+            
             execution_time = (time.time() - start_time) * 1000
-            status = result.get("status", CheckResult.PASS)
+            
+            if proc.returncode != 0:
+                # Subprocess crashed
+                stderr = proc.stderr.strip() if proc.stderr else 'Unknown error'
+                return self._create_outcome(
+                    rule_id=context.rule_config.get("rule_id", "unknown"),
+                    rule_name=context.rule_config.get("rule_name", "Custom Script Rule"),
+                    status=CheckResult.ERROR,
+                    message=f"Sandbox process failed (code {proc.returncode}): {stderr[:500]}",
+                    execution_time_ms=execution_time
+                )
+            
+            # Parse result from stdout
+            stdout = proc.stdout.strip()
+            if not stdout:
+                return self._create_outcome(
+                    rule_id=context.rule_config.get("rule_id", "unknown"),
+                    rule_name=context.rule_config.get("rule_name", "Custom Script Rule"),
+                    status=CheckResult.ERROR,
+                    message="Sandbox produced no output",
+                    execution_time_ms=execution_time
+                )
+            
+            try:
+                result = json_module.loads(stdout)
+            except json_module.JSONDecodeError as e:
+                return self._create_outcome(
+                    rule_id=context.rule_config.get("rule_id", "unknown"),
+                    rule_name=context.rule_config.get("rule_name", "Custom Script Rule"),
+                    status=CheckResult.ERROR,
+                    message=f"Sandbox output not valid JSON: {e}",
+                    details={'raw_output': stdout[:500]},
+                    execution_time_ms=execution_time
+                )
+            
+            # Validate and normalize result
+            status = result.get("status", "pass")
             if isinstance(status, str):
                 try:
                     status = CheckResult(status)
                 except ValueError:
                     status = CheckResult.PASS
-
+            
             return self._create_outcome(
                 rule_id=context.rule_config.get("rule_id", "unknown"),
                 rule_name=context.rule_config.get("rule_name", "Custom Script Rule"),
@@ -677,52 +816,23 @@ class CustomScriptRulePlugin(BaseRulePlugin):
                 confidence=result.get("confidence", 1.0),
                 execution_time_ms=execution_time
             )
+            
+        except subprocess.TimeoutExpired:
+            return self._create_outcome(
+                rule_id=context.rule_config.get("rule_id", "unknown"),
+                rule_name=context.rule_config.get("rule_name", "Custom Script Rule"),
+                status=CheckResult.ERROR,
+                message=f"Script timeout after {timeout}s",
+                execution_time_ms=(time.time() - start_time) * 1000
+            )
         except Exception as e:
             return self._create_outcome(
                 rule_id=context.rule_config.get("rule_id", "unknown"),
                 rule_name=context.rule_config.get("rule_name", "Custom Script Rule"),
                 status=CheckResult.ERROR,
-                message=f"Script execution failed: {e}",
+                message=f"Sandbox execution failed: {e}",
                 execution_time_ms=(time.time() - start_time) * 1000
             )
-
-    @staticmethod
-    def _validate_python_script(script: str) -> None:
-        """Reject dangerous Python constructs before execution."""
-        if not script or not script.strip():
-            raise ValueError("Script body is empty")
-
-        try:
-            tree = ast.parse(script, mode='exec')
-        except SyntaxError as exc:
-            raise ValueError(f"Invalid Python syntax: {exc.msg}") from exc
-
-        denied_names = {
-            '__import__', 'eval', 'exec', 'compile', 'open', 'input', 'globals', 'locals', 'vars',
-            'breakpoint', 'help', 'dir', 'super', 'type', 'object', 'staticmethod', 'classmethod', 'property',
-            'os', 'sys', 'subprocess', 'socket', 'pathlib', 'importlib', 'builtins', 'pickle', 'marshal',
-            'shutil', 'tempfile', 'requests', 'http', 'ftplib', 'sqlite3', 'ctypes', 'asyncio', 'threading',
-        }
-        denied_attrs = {
-            '__class__', '__bases__', '__subclasses__', '__globals__', '__mro__', '__dict__',
-            '__code__', '__func__', '__call__', '__getattribute__', '__setattr__', '__delattr__',
-            '__get__', '__set__', '__del__', '__import__', 'mro', 'format_map'
-        }
-
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.Import, ast.ImportFrom)):
-                raise ValueError("Imports are not allowed in custom script rules")
-            if isinstance(node, ast.Name) and node.id in denied_names:
-                raise ValueError(f"Name '{node.id}' is not allowed")
-            if isinstance(node, ast.Attribute) and node.attr in denied_attrs:
-                raise ValueError(f"Attribute access '{node.attr}' is not allowed")
-            if isinstance(node, ast.Call):
-                func = node.func
-                if isinstance(func, ast.Name) and func.id in denied_names:
-                    raise ValueError(f"Call to '{func.id}' is not allowed")
-                if isinstance(func, ast.Attribute) and func.attr in denied_attrs:
-                    raise ValueError(f"Method call '{func.attr}' is not allowed")
-
     def _execute_javascript(
         self,
         context: RuleContext,

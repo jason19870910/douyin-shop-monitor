@@ -50,6 +50,7 @@ export const queryKeys = {
     list: (params: Record<string, unknown>) => [...queryKeys.creators.lists(), params] as const,
     overview: (params: Record<string, unknown>) => [...queryKeys.creators.all, 'overview', params] as const,
     works: (params: Record<string, unknown>) => [...queryKeys.creators.all, 'works', params] as const,
+    externalWorks: (params: Record<string, unknown>) => [...queryKeys.creators.all, 'externalWorks', params] as const,
     detail: (id: string) => [...queryKeys.creators.all, 'detail', id] as const,
   },
   orders: {
@@ -121,7 +122,7 @@ function createQueryOptions<TData, TError>(
   return {
     queryKey,
     queryFn,
-    staleTime: 1000 * 60 * 5,
+    staleTime: 1000 * 60, // 1 minute
     gcTime: 1000 * 60 * 30,
     retry: 2,
     ...options,
@@ -284,7 +285,7 @@ export function useHealthCheck(
     createQueryOptions(
       queryKeys.health.check(),
       () => healthApi.check() as Promise<HealthResponse>,
-      { refetchInterval: 1000 * 60 * 5, ...options }
+      { refetchInterval: 1000 * 60 * 60 * 5, ...options }
     )
   );
 }
@@ -296,7 +297,7 @@ export function useExternalApiHealth(
     createQueryOptions(
       [...queryKeys.health.all, 'external'],
       () => healthApi.checkExternal() as Promise<ExternalApiHealthResponse>,
-      { refetchInterval: 1000 * 60 * 5, ...options }
+      { refetchInterval: 1000 * 60 * 60 * 5, ...options }
     )
   );
 }
@@ -339,7 +340,7 @@ export function useDashboardStats(
     createQueryOptions(
       queryKeys.dashboard.stats(params),
       () => dashboardApi.getStats(params) as Promise<DashboardStats>,
-      { refetchInterval: 1000 * 60 * 2, ...options }
+      { refetchInterval: 1000 * 60 * 60 * 5, ...options }
     )
   );
 }

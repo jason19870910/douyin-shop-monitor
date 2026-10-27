@@ -154,7 +154,7 @@ Nginx 容器 (443/80) ──► 静态资源 (/assets/, /index.html)  [frontend 
 | `ALERT_EMAIL` | `.env` / 环境变量 | 告警邮件收件人 |
 | `DATA_DIR` | 环境变量 / `docker-compose.yml` | 本地 JSON 数据目录 (`/data`) |
 | `API_KEY` | Docker Secret (`api_key`) | 内部 API 认证密钥 |
-| 签名参数 (`__TOKEN`, `MS_TOKEN`, `a_bogus`, `verify_fp`, `fp`) | Docker Secrets | 抖店签名所需动态参数 |
+| 签名参数 (`__TOKEN`, `MS_TOKEN`, `a_bogus`, `verify_fp`, `fp`) | Docker Secrets | 抖店签名所需动态参数；`__TOKEN`/`TOKEN` 为**非必需**，订单数据主要依赖 `FXG_COOKIES` 会话 Cookie |
 | `FXG_SHOP_ID`, `FXG_LOG_ID` | Docker Secrets | 抖店店铺/日志 ID |
 | `DOUYIN_APP_ID`, `DOUYIN_APP_SECRET` | Docker Secrets | 抖音开放平台应用凭证 |
 | `OAUTH_REDIRECT_URI` | 环境变量 | OAuth 回调地址 |

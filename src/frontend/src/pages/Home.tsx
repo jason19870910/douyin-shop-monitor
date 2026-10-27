@@ -93,10 +93,17 @@ const Home = () => {
   const manualSyncMutation = useManualSync({
     onSuccess: () => {
       message.success('同步已触发');
+      queryClient.invalidateQueries({ queryKey: queryKeys.sync.all });
       queryClient.invalidateQueries({ queryKey: queryKeys.health.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.all });
       queryClient.invalidateQueries({ queryKey: queryKeys.products.stats() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.products.lists() });
       queryClient.invalidateQueries({ queryKey: queryKeys.orders.stats() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.orders.lists() });
       queryClient.invalidateQueries({ queryKey: queryKeys.creators.overview({ recent_days: 7 }) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.creators.lists() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.videos.lists() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.accounts.lists() });
     },
     onError: () => {
       message.error('同步失败');

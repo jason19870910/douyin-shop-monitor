@@ -236,6 +236,9 @@ def check_auth():
         auth_header = request.headers.get('Authorization', '')
         api_key_header = request.headers.get('X-API-Key', '')
 
+        # Debug: print all headers
+        print(f"[AUTH DEBUG] All headers: {dict(request.headers)}", flush=True)
+
         from config import Config
         api_key = (Config.API_KEY or '').strip()
         if not api_key:
@@ -259,6 +262,7 @@ def check_auth():
             return unauthorized_response('Missing or invalid Authorization header or X-API-Key')
 
 
+app.register_blueprint(frontend_bp)
 app.register_blueprint(products_bp)
 app.register_blueprint(orders_bp)
 app.register_blueprint(creators_bp)
@@ -270,7 +274,6 @@ app.register_blueprint(media_bp)
 app.register_blueprint(alerts_bp)
 app.register_blueprint(dashboard_bp)
 app.register_blueprint(sync_bp)
-app.register_blueprint(frontend_bp)
 app.register_blueprint(system_bp)
 
 @app.route('/api/v1/health', methods=['GET'])

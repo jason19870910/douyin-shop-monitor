@@ -1,8 +1,8 @@
 ---
 title: 故障排查指南
-version: 1.0.2
+version: 1.0.4
 status: Published
-last_updated: 2026-10-17
+last_updated: 2026-10-27
 owner: DevOps Lead
 reviewers: [Tech Lead, 运维工程师, Backend Lead]
 approvers: [Tech Lead]
@@ -11,6 +11,7 @@ doc_id: DOC-REF-003
 tags: [参考, 故障排查, 故障处理, 运维, SRE, 自助诊断]
 related_docs: [DOC-OPS-001, DOC-OPS-003, DOC-OPS-005, DOC-REF-002]
 changelog: |
+  v1.0.4 (2026-10-27): 新增第 2.11 节订单页面无数据排查步骤（FXG_COOKIES 过期 / page=0 分页 / TOKEN 非必需）；明确 TOKEN 签名参数非必需，订单数据主要依赖 FXG_COOKIES 会话 Cookie - DevOps Lead
   v1.0.2 (2026-10-17): 新增第 2.9 节合规检测返回 checked: 0 / 商品数据为空的排查步骤（FXG_COOKIES 过期/Redis 缓存空/上游 API code 10008） - DevOps Lead
   v1.0.1 (2026-10-16): 同步架构变更 - 移除 Celery/MySQL 引用，改为内置调度器排查命令 - DevOps Lead
   v1.0.0 (2026-09-26): 初版创建 - DevOps Lead
@@ -214,6 +215,71 @@ changelog: |
 
 > **根因**: FXG API 在 Cookie 过期时仍返回 HTTP 200，但响应体中 `code=10008`。fetcher.py 原先仅校验 HTTP 状态码，导致业务错误被静默吞掉，products 为空列表，合规检测返回 `checked: 0`。现已在 fetcher.py 增加业务错误码校验，Cookie 过期时会抛出 HTTPError 并记录明确 ERROR 日志，后续可直接通过 `docker logs douyin_app | grep "FXG API 业务错误"` 定位。
 ```
+
+### 2.10 告警停用后仍发送 / 配置双写不一致 (新增 2026-10-22)
+
+现象: 前端页面已将告警配置停用（enabled=false），但后端仍持续发送告警；或前端显示的告警开关状态与后端实际行为不一致。
+
+├─► 检查 Redis 告警配置键及其 TTL
+│   └─► docker exec douyin_redis redis-cli TTL douyin:monitor:alert_config
+│   返回 -1 表示永不过期（正常）；返回 3600 或其他正数 → 键带有默认 TTL，1 小时后过期并回退默认 enabled=true，导致告警被重新打开。
+│   └─► docker exec douyin_redis redis-cli GET douyin:monitor:alert_config
+│   enabled 字段应为 false；若为 true → Redis 中存在脏数据，需手动 DEL 并通过 set_config 双写正确值。
+
+├─► 检查告警配置文件合法性
+│   └─► cat /data/alert_config.json
+│   文件应为合法 JSON（键名均需双引号）。非法 JSON 会导致 get_config 解析失败回退默认 enabled=true。
+│   └─► 若非法 → 使用 set_config('alert_config', {...}) 重建为合法 JSON，并同步写入 Redis 与文件。
+
+├─► 检查 get_config() 读取路径与脏数据回退
+│   └─► get_config() 优先读 Redis，Redis 缺失/过期才回退文件，文件再失败才回退默认值。
+│   若 Redis 中残留旧版本（如 douyin:monitor:alert_config 带 TTL 且 enabled=true），即使文件已改为 enabled=false，读取仍会返回 Redis 脏数据。
+│   └─► 清理: docker exec douyin_redis redis-cli DEL douyin:monitor:alert_config，再重新写入正确配置。
+
+├─► 检查 save_all_data() 是否用带 TTL 键覆盖文件
+│   └─► fetcher.py save_all_data() 将缓存数据批量持久化到 JSON 文件。
+│   若历史版本对 auth 使用了 cache.get(CACHE_KEYS['auth'])（带默认 3600s TTL），可能用默认值/脏值覆盖 auth.json。
+│   现已统一改为 save_json_file(AUTH_FILE, get_config('auth_config'))，移除旁路写；并清理了 Redis 残留键 douyin:monitor:auth。
+
+└─► 验证修复
+    └─► docker exec douyin_redis redis-cli TTL douyin:monitor:alert_config   # 返回 -1
+    └─► docker exec douyin_redis redis-cli GET douyin:monitor:alert_config   # enabled 为 false
+    └─► cat /data/alert_config.json   # 合法 JSON，enabled 为 false
+    └─► 告警不再发送，前端开关状态与实际一致
+
+> **根因**: Redis 告警配置键带默认 3600s TTL 过期后回退默认 enabled=true；或 alert_config.json 为非法 JSON 导致解析失败回退默认值；或 save_all_data 用带 TTL 的默认值覆盖文件。已统一通过 set_config（Redis ttl=None + JSON 文件原子双写）保存，临时文件名带 pid+uuid 避免并发冲突，并清理了 Redis 残留 auth 键。
+
+### 2.11 订单页面无数据 / 前端订单列表为空 (新增 2026-10-27)
+
+现象: `http://122.51.208.138:3000/#/dian/orders` 页面显示无数据，或 `/api/v1/orders` 返回 `items=[]`、`total=0`。
+
+```
+├─► 验证订单接口是否返回真实数据
+│   └─► curl -H "X-API-Key: wlkj_douyin_api_20260921_abc123" 'http://localhost:5000/api/v1/orders?page=1&pageSize=10' | python3 -m json.tool
+│   预期：data_source="real"，total > 0，items 非空
+
+├─► 若 items 为空 / data_source="mock"：检查 FXG_COOKIES 是否过期
+│   └─► docker logs douyin_app --tail 100 | grep -i "FXG API 业务错误"
+│   如出现 `code=10008` "登录信息已失效" → FXG Cookie 已过期
+│   └─► grep FXG_COOKIES /opt/douyin-platform/config/.env
+│   值为空或已过期 → 按 RUNBOOK 第 5.2 节流程更新 FXG_COOKIES，重建容器：
+│       cd /opt/douyin-platform
+│       docker compose up -d --force-recreate app
+│       docker restart douyin_frontend
+
+├─► 若接口返回正常但前端页面仍无数据：检查前端请求 page 参数
+│   └─► 前端若请求 page=0，orders.py 已将其纠正为 page=1（max(1, page)），无需处理
+│   └─► 清除浏览器缓存后重新打开订单页面 (Ctrl+Shift+R)
+
+├─► 关于 TOKEN 参数
+│   └─► TOKEN/__TOKEN 为非必需参数，清空 TOKEN= 不影响订单接口返回数据
+│   └─► 订单数据主要依赖 FXG_COOKIES 会话 Cookie，无需关注 TOKEN 是否配置
+
+└─► 验证恢复
+    └─► curl -H "X-API-Key: wlkj_douyin_api_20260921_abc123" 'http://localhost:5000/api/v1/orders?page=1&pageSize=10'
+    返回 data_source="real" 且 items 非空 即恢复正常
+
+> **根因**: FXG_COOKIES 会话 Cookie (sid_tt、sessionid、uid_tt 等) 过期导致 FXG API 返回 code=10008。之前仍返回 HTTP 200 但业务码 10008，订单抓取失败。现已将完整 Cookie 替换并重建容器，接口恢复正常。
 
 ---
 

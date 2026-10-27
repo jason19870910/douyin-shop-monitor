@@ -1,6 +1,6 @@
 """Auth blueprint."""
 from flask import Blueprint, request, current_app, make_response
-from services.fetcher import cache, CACHE_KEYS, get_config, set_config, DEFAULT_AUTH_CONFIG
+from services.fetcher import cache, get_config, set_config, DEFAULT_AUTH_CONFIG
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 import base64
@@ -289,7 +289,6 @@ def auth_callback():
     })
 
     set_config('auth_config', auth_config)
-    cache.set(CACHE_KEYS['auth'], auth_config)
 
     logger.info(f"OAuth authorization successful for open_id: {token_data.get('open_id', 'unknown')}")
 
@@ -326,7 +325,6 @@ def auth_refresh():
             'refresh_expires_at': 0
         })
         set_config('auth_config', auth_config)
-        cache.set(CACHE_KEYS['auth'], auth_config)
         return bad_request_response('Refresh token expired, please re-authorize')
     
     # Refresh the token
@@ -351,7 +349,6 @@ def auth_refresh():
     })
     
     set_config('auth_config', auth_config)
-    cache.set(CACHE_KEYS['auth'], auth_config)
     
     logger.info("Access token refreshed successfully")
     
@@ -371,7 +368,6 @@ def auth_logout():
         'scope': []
     })
     set_config('auth_config', auth_config)
-    cache.set(CACHE_KEYS['auth'], auth_config)
     return success_response(None, 'Authorization revoked')
 
 

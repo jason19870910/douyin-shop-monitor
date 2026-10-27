@@ -56,6 +56,7 @@ export interface DataTableProps<T> {
     gcTime?: number;
     retry?: number;
     refetchOnWindowFocus?: boolean;
+    refetchInterval?: number;
   };
   showDataSourceSwitch?: boolean;
 }
@@ -104,10 +105,11 @@ export function DataTable<T extends Record<string, unknown>>({
   const { data, isLoading, isError, error, isFetching } = useQuery({
     queryKey: fullQueryKey,
     queryFn: () => queryFn(buildParams()).then(transformResponse || (d => d)),
-    staleTime: queryOptions?.staleTime ?? 1000 * 60 * 5,
+    staleTime: queryOptions?.staleTime ?? 1000 * 60,
     gcTime: queryOptions?.gcTime ?? 1000 * 60 * 30,
     retry: queryOptions?.retry ?? 2,
-    refetchOnWindowFocus: queryOptions?.refetchOnWindowFocus ?? false,
+    refetchOnWindowFocus: queryOptions?.refetchOnWindowFocus ?? true,
+    refetchInterval: queryOptions?.refetchInterval ?? 1000 * 60 * 60 * 5,
   });
 
   const loading = isLoading || isFetching;

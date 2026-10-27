@@ -10,6 +10,8 @@ import {
 } from '@ant-design/icons';
 import { syncApi, healthApi } from '@/api/index';
 import { useApi } from '@/hooks/useApi';
+import { queryClient } from '@/hooks/queryClient';
+import { queryKeys } from '@/hooks/useQueries';
 import { formatDateTime } from '@/utils/formatters';
 import styles from './Layout.module.css';
 
@@ -125,6 +127,14 @@ export const AppLayout = () => {
       try {
         await syncApi.manualSync();
         checkHealth();
+        queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.all });
+        queryClient.invalidateQueries({ queryKey: queryKeys.health.all });
+        queryClient.invalidateQueries({ queryKey: queryKeys.sync.all });
+        queryClient.invalidateQueries({ queryKey: queryKeys.creators.all });
+        queryClient.invalidateQueries({ queryKey: queryKeys.videos.all });
+        queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
+        queryClient.invalidateQueries({ queryKey: queryKeys.orders.all });
+        queryClient.invalidateQueries({ queryKey: queryKeys.accounts.all });
         message.success('数据同步成功');
         break; // Success, exit retry loop
       } catch (err) {

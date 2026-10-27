@@ -29,7 +29,9 @@ def _resolve_build_dir() -> Optional[Path]:
 @frontend_bp.route('/<path:path>')
 def serve_frontend(path: str):
     """Serve React frontend SPA with history-fallback."""
+    print(f"[FRONTEND DEBUG] serve_frontend called with path={repr(path)}", flush=True)
     if path.startswith('api/'):
+        print(f"[FRONTEND DEBUG] path starts with api/, aborting 404", flush=True)
         abort(404)
 
     build_dir = _resolve_build_dir()

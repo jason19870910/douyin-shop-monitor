@@ -1,10 +1,16 @@
 """Accounts blueprint."""
 from flask import Blueprint, request
-from services.fetcher import cache, CACHE_KEYS, DEFAULT_ACCOUNTS
+from services.fetcher import cache, CACHE_KEYS, DEFAULT_ACCOUNTS, ACCOUNTS_FILE, save_json_file
 from datetime import datetime
 from utils.responses import success_response, not_found_response, bad_request_response
 
 accounts_bp = Blueprint('accounts', __name__, url_prefix='/api/v1')
+
+
+def _persist_accounts(accounts: list) -> None:
+    """双写账号数据：Redis 持久化（无 TTL）+ JSON 文件，避免缓存过期后丢失。"""
+    cache.set(CACHE_KEYS['accounts'], accounts, ttl=None)
+    save_json_file(ACCOUNTS_FILE, accounts)
 
 
 @accounts_bp.route('/accounts', methods=['GET'])
@@ -93,7 +99,7 @@ def create_account():
     
     accounts = cache.get(CACHE_KEYS['accounts'], DEFAULT_ACCOUNTS)
     accounts.insert(0, account)
-    cache.set(CACHE_KEYS['accounts'], accounts)
+    _persist_accounts(accounts)
     
     # Transform for response
     transformed_account = {
@@ -142,7 +148,7 @@ def update_account(account_id: str):
         account['create_time'] = data['create_time']
     account['updated_at'] = datetime.now().isoformat()
     
-    cache.set(CACHE_KEYS['accounts'], accounts)
+    _persist_accounts(accounts)
     
     # Transform for response
     transformed_account = {
@@ -167,5 +173,5 @@ def delete_account(account_id: str):
         return not_found_response('Account')
     
     accounts = [a for a in accounts if a.get('account_id') != account_id]
-    cache.set(CACHE_KEYS['accounts'], accounts)
+    _persist_accounts(accounts)
     return success_response(None, 'Account deleted')

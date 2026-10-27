@@ -20,6 +20,7 @@ import {
 } from '@ant-design/icons';
 import { creatorApi, type CreatorWork } from '@/api/index';
 import { useQuery } from '@tanstack/react-query';
+import { queryKeys } from '@/hooks/useQueries';
 import { formatNumber, formatDateTime } from '@/utils/formatters';
 import { PageContainer, PageHeader, TableCard } from '@/components/layout';
 import { TablePaginationConfig } from 'antd';
@@ -58,30 +59,30 @@ const Creator = () => {
 
   // Creators API - only fetch when 'creators' tab is active
   const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['creators', 'list', { page, pageSize, keyword: searchText }],
+    queryKey: queryKeys.creators.list({ page, pageSize, keyword: searchText }),
     queryFn: () => creatorApi.getList({ page, size: pageSize, keyword: searchText }) as Promise<{ items: Creator[]; total: number }>,
     enabled: activeTab === 'creators',
-    staleTime: 1000 * 60 * 5,
+    staleTime: 1000 * 60,
     gcTime: 1000 * 60 * 30,
     retry: 2,
   });
 
   // Works API (内容管理) - only fetch when 'works' tab is active
   const { data: worksData, isLoading: worksLoading, isError: worksIsError, error: worksError, refetch: refetchWorks } = useQuery({
-    queryKey: ['creators', 'works', { page, pageSize, keyword: searchText }],
-    queryFn: () => creatorApi.getWorks({ page, size: pageSize, keyword: searchText }) as Promise<{ items: CreatorWork[]; total: number }>,
+    queryKey: queryKeys.creators.works({ page, pageSize, keyword: searchText, recent_days: 90 }),
+    queryFn: () => creatorApi.getWorks({ page, size: pageSize, keyword: searchText, recent_days: 90 }) as Promise<{ items: CreatorWork[]; total: number }>,
     enabled: activeTab === 'works',
-    staleTime: 1000 * 60 * 5,
+    staleTime: 1000 * 60,
     gcTime: 1000 * 60 * 30,
     retry: 2,
   });
 
   // Video Management API (视频管理) - only fetch when 'videos' tab is active
   const { data: videoData, isLoading: videoLoading, isError: videoIsError, error: videoError, refetch: refetchVideos } = useQuery({
-    queryKey: ['creators', 'externalWorks', { page, pageSize, keyword: searchText }],
-    queryFn: () => creatorApi.getExternalWorks({ page, size: pageSize, keyword: searchText }) as Promise<{ items: CreatorWork[]; total: number }>,
+    queryKey: queryKeys.creators.externalWorks({ page, pageSize, keyword: searchText, recent_days: 90 }),
+    queryFn: () => creatorApi.getExternalWorks({ page, size: pageSize, keyword: searchText, recent_days: 90 }) as Promise<{ items: CreatorWork[]; total: number }>,
     enabled: activeTab === 'videos',
-    staleTime: 1000 * 60 * 5,
+    staleTime: 1000 * 60,
     gcTime: 1000 * 60 * 30,
     retry: 2,
   });
@@ -162,7 +163,7 @@ const Creator = () => {
         link.click();
         message.success('导出成功');
       } else if (activeTab === 'works') {
-        const result = await creatorApi.getWorks({ page: 1, size: 10000 });
+        const result = await creatorApi.getWorks({ page: 1, size: 10000, recent_days: 90 });
         message.destroy();
 
         const csvContent = [
@@ -201,7 +202,7 @@ const Creator = () => {
         link.click();
         message.success('导出成功');
       } else {
-        const result = await creatorApi.getExternalWorks({ page: 1, size: 10000 });
+        const result = await creatorApi.getExternalWorks({ page: 1, size: 10000, recent_days: 90 });
         message.destroy();
 
         const csvContent = [
@@ -452,10 +453,11 @@ const Creator = () => {
 
   const filteredCreators = useMemo(() => {
     const creators = data?.items || [];
+    const searchLower = searchText.toLowerCase();
     return creators.filter(
       (c: Creator) =>
-        c.nickname?.toLowerCase().includes(searchText.toLowerCase()) ||
-        c.creator_id?.toString().toLowerCase().includes(searchText.toLowerCase()),
+        (c.nickname || c.creator_name || c.name || '').toLowerCase().includes(searchLower) ||
+        c.creator_id?.toString().toLowerCase().includes(searchLower),
     );
   }, [data, searchText]);
 

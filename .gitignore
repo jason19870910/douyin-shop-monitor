@@ -61,6 +61,11 @@ Dockerfile.*
 *.b64
 *.conf
 !src/frontend/nginx.conf
+src/frontend/build/
+
+# Runtime artifacts
+src/backend/logs/
+src/backend/migrations/.migration_state.json
 
 # Documentation drafts
 DECISIONS.md

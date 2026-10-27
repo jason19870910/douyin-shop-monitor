@@ -160,7 +160,6 @@ def refresh_oauth_token_task(self):
 
             from services.fetcher import set_config
             set_config('auth_config', auth_config)
-            cache.set(CACHE_KEYS['auth'], auth_config)
 
             logger.info("OAuth token refreshed successfully via scheduled task")
             return {'status': 'success', 'message': 'Token refreshed'}

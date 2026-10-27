@@ -1,8 +1,0 @@
-﻿Initial commit: Douyin compliance platform with HAOHUO plugins enabled
-
-- Backend: Flask API with compliance detection (products and works)
-- HAOHUO plugins: IMAGE, SPEC, PRICE, FATAL rule types registered
-- 23 compliance rules covering keyword, regex, ML, custom script, HAOHUO types
-- Frontend: React + Ant Design + TanStack Query
-- Rule management UI with applicable_to (product/work) filtering
-- Haohuo product preview integration for enriched compliance data

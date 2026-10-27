@@ -257,7 +257,7 @@ def get_dashboard_stats():
         },
         'creators': {
             'total': len(creators),
-            'total_followers': sum(c.get('follower_count', 0) for c in creators),
+            'total_followers': sum(c.get('total_followers', c.get('follower_count', 0)) for c in creators),
         },
         'videos': {
             'total': len(videos),

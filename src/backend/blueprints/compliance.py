@@ -565,6 +565,7 @@ def create_compliance_rule():
         'severity': sanitized['severity'],
         'category': sanitized['category'],
         'enabled': sanitized['enabled'],
+        'applicable_to': sanitized['applicable_to'],
         'created_at': datetime.now().isoformat(),
         'updated_at': datetime.now().isoformat()
     }

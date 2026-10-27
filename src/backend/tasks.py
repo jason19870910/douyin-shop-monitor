@@ -82,19 +82,16 @@ def check_alerts_task():
 
 @shared_task
 def full_sync_task():
-    """Celery task to run full data synchronization."""
+    """Celery task to run full data synchronization (async mode for manual sync).
+
+    Runs the complete scheduled job so that last_update is written after sync completes.
+    """
     logger.info("Running full_sync_task via shared service...")
-    
-    # Chain tasks
-    fetch_products_task.delay()
-    fetch_orders_task.delay()
-    fetch_creators_task.delay()
-    fetch_creator_works_task.delay()
+    from services.fetcher import scheduled_job
 
-    # Check alerts after a short delay
-    check_alerts_task.apply_async(countdown=10)
-
-    return {'status': 'started', 'message': 'Full sync initiated'}
+    # Execute the full sync job synchronously so last_update gets updated
+    result = scheduled_job()
+    return result
 
 
 @shared_task
