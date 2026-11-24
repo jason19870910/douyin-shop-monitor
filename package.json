@@ -1,6 +1,6 @@
 {
   "name": "douyin-shop-monitor",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "抖音电商数据监控平台 - 合规检测、商品同步、创作者管理",
   "scripts": {
