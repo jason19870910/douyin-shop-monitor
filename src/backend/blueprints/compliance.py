@@ -426,115 +426,32 @@ def check_products():
 @compliance_bp.route('/compliance/check/works', methods=['POST'])
 def check_works():
     """Run compliance check on creator works (videos).
-    
-    Fetches works from Redis cache (creator_works) and runs
-    enabled rules with applicable_to containing 'work' against work data.
-    Results are logged to compliance_items with target_type='work'.
+
+    复用 services.fetcher.fetch_and_check_compliance_works()：周期同步任务与手动
+    触发走同一实现，避免两处逻辑分叉。作品 target_data 同时提供 title/work_title，
+    确保文本规则（KEYWORD/REGEX）能命中视频标题。
     """
-    from services.fetcher import load_json_file, CACHE_KEYS as FK, CREATOR_WORKS_FILE
-    
-    # 获取作品数据：优先从 Redis cache
-    works_data = cache.get(FK['creator_works'], None)
-    if works_data is None:
-        # 回退到同步任务持久化的真实快照（DATA_DIR/creator_works.json），非模拟数据
-        if CREATOR_WORKS_FILE.exists():
-            works_data = load_json_file(CREATOR_WORKS_FILE, [], model_type='creator_works')
-            cache.set(FK['creator_works'], works_data)
-        else:
-            return success_response({
-                'status': 'no_data',
-                'message': 'No works data found. Run sync creator works first.',
-                'checked': 0,
-                'violations': 0
-            })
-    
-    # 获取已启用的规则：与商品检测同一口径过滤（applicable_to 缺失的旧规则默认适用全部目标）
-    rules = _ensure_list(cache.get(CACHE_KEYS['compliance_rules'], []))
-    enabled_rules = filter_rules_for_target(rules, 'work')
+    from services.fetcher import fetch_and_check_compliance_works
 
-    if not enabled_rules:
-        return success_response({
-            'status': 'no_rules',
-            'message': 'No enabled compliance rules for works found. Create rules first.',
-            'checked': 0,
-            'violations': 0
-        })
+    result = fetch_and_check_compliance_works()
 
-    # 使用现有 rule_engine 进行检查
-    engine = get_rule_engine()
-    checked = 0
-    violation_entries = []
-    # 规则 severity 映射：插件 outcome 多数不带 severity，由规则配置兜底传导到违规日志
-    rule_severity_map = {
-        (r.get('rule_id') or r.get('id')): (r.get('severity') or '')
-        for r in enabled_rules if isinstance(r, dict)
-    }
-
-    for work in works_data:
-        work_id = str(work.get('aweme_id') or work.get('id') or work.get('work_id', ''))
-        work_title = work.get('title') or work.get('desc') or work.get('work_title', '')
-
-        if not work_id:
-            continue
-
-        # 构建 target_data - 作品字段映射
-        target_data = {
-            'work_id': work_id,
-            'work_title': work_title,
-            'description': work.get('desc', ''),
-            'tags': work.get('tags', []),
-            'cover_url': work.get('cover_url', ''),
-            'video_url': work.get('video_url', ''),
-            'duration': work.get('duration', 0),
-            'create_time': work.get('create_time', 0),
-            'music_id': work.get('music_id', ''),
-            'music_title': work.get('music_title', ''),
-            'statistics': work.get('statistics', {}),
-            '_raw_work': work,
-        }
-
-        # 对每个规则进行检查
-        outcomes = engine.check_all(enabled_rules, target_data, 'work', work_id)
-
-        for outcome in outcomes:
-            checked += 1
-            status_val = outcome.status.value if hasattr(outcome.status, 'value') else str(outcome.status)
-            # 仅记录违规/告警（fail/warning/error），统一口径
-            if status_val not in COMPLIANCE_LOG_STATUSES:
-                continue
-            violation_entries.append(build_compliance_log_entry(
-                target_type='work',
-                target_id=work_id,
-                target_name=work_title[:100],
-                outcome=outcome,
-                category='作品合规',
-                severity=rule_severity_map.get(outcome.rule_id, ''),
-            ))
-
-    # 统一走 Redis + DATA_DIR/compliance.json 双写
-    _append_compliance_logs(violation_entries)
-
-    # 统计结果
-    by_category = {}
-    by_rule = {}
-    for v in violation_entries:
-        cat = v.get('category', '作品合规')
-        by_category[cat] = by_category.get(cat, 0) + 1
-        rule = v.get('rule_id', 'unknown')
-        by_rule[rule] = by_rule.get(rule, 0) + 1
-
+    violation_entries = result.get('items', [])
     fail_count = len([v for v in violation_entries if v.get('status') == 'fail'])
     warning_count = len([v for v in violation_entries if v.get('status') == 'warning'])
 
     return success_response({
         'status': 'completed',
-        'checked': checked,
+        'checked': result.get('checked', 0),
         'violations': fail_count,
         'warnings': warning_count,
-        'by_category': by_category,
-        'by_rule': by_rule,
+        'by_category': result.get('by_category', {}),
+        'by_rule': result.get('by_rule', {}),
         'items': violation_entries,
-        'message': f'Checked {checked} rules, found {fail_count} violations, {warning_count} warnings'
+        'message': 'Checked {} rules, found {} violations, {} warnings'.format(
+            result.get('checked', 0), fail_count, warning_count
+        ),
+        'sync_status': result.get('status'),
+        'details': result.get('details', {}),
     })
 
 # Compliance Rules endpoints

@@ -1352,6 +1352,156 @@ def fetch_and_check_compliance() -> Dict[str, Any]:
         }
 
 
+def fetch_and_check_compliance_works() -> Dict[str, Any]:
+    """对达人作品（视频）执行合规检测。
+
+    与 fetch_and_check_compliance（商品）对称：从缓存/文件读取 creator_works，
+    过滤 applicable_to 含 'work' 的启用规则逐条检测，违规写入合规日志。
+    供周期同步任务与手动 /compliance/check/works 共用，避免逻辑分叉。
+
+    Returns:
+        dict: status/checked/pass/fail/warning/violations/warnings/by_category/by_rule/items
+    """
+    logger.info("Running compliance checks on creator works...")
+    try:
+        # 获取作品数据：优先 Redis 缓存，回退同步任务持久化快照（非模拟数据）
+        works_data = cache.get(CACHE_KEYS['creator_works'], None)
+        if works_data is None:
+            if CREATOR_WORKS_FILE.exists():
+                works_data = load_json_file(CREATOR_WORKS_FILE, [], model_type='creator_works')
+                cache.set(CACHE_KEYS['creator_works'], works_data)
+            else:
+                works_data = []
+
+        if not works_data:
+            return {
+                'status': 'success', 'message': 'No works to check',
+                'checked': 0, 'pass': 0, 'fail': 0, 'warning': 0,
+                'violations': 0, 'warnings': 0, 'items': [],
+            }
+
+        rules = cache.get(CACHE_KEYS['compliance_rules'], [])
+        enabled_rules = filter_rules_for_target(rules, 'work')
+        if not enabled_rules:
+            return {
+                'status': 'success', 'message': 'No enabled compliance rules for works',
+                'checked': 0, 'pass': 0, 'fail': 0, 'warning': 0,
+                'violations': 0, 'warnings': 0, 'items': [],
+            }
+
+        logger.info("Running compliance check on {} works with {} rules".format(len(works_data), len(enabled_rules)))
+
+        from services.rule_engine import get_rule_engine, CheckResult
+        engine = get_rule_engine()
+        # 规则 severity 兜底传导到违规日志（插件 outcome 多数不带 severity）
+        rule_severity_map = {
+            (r.get('rule_id') or r.get('id')): (r.get('severity') or '')
+            for r in enabled_rules if isinstance(r, dict)
+        }
+
+        checked = 0
+        total_fail = 0
+        total_warning = 0
+        violation_entries = []
+        all_results = []
+
+        for work in works_data:
+            work_id = str(work.get('aweme_id') or work.get('id') or work.get('work_id', ''))
+            work_title = work.get('title') or work.get('desc') or work.get('work_title', '')
+            if not work_id:
+                continue
+
+            # 构建 target_data：作品字段映射。
+            # 关键修复：同时提供 title 与 work_title。KEYWORD/REGEX 规则的默认
+            # fields 为 [product_name, description, title, product_title]，旧实现只提供
+            # work_title/desc，导致视频标题无法被文本规则命中（标题漏检）。
+            target_data = {
+                'work_id': work_id,
+                'title': work_title,
+                'work_title': work_title,
+                'description': work.get('desc', '') or work.get('description', ''),
+                'tags': work.get('tags', []),
+                'cover_url': work.get('cover_url', ''),
+                'video_url': work.get('video_url', ''),
+                'duration': work.get('duration', 0),
+                'create_time': work.get('create_time', 0),
+                'music_id': work.get('music_id', ''),
+                'music_title': work.get('music_title', ''),
+                'statistics': work.get('statistics', {}),
+                '_raw_work': work,
+            }
+
+            outcomes = engine.check_all(enabled_rules, target_data, 'work', work_id)
+
+            for outcome in outcomes:
+                checked += 1
+                status_val = outcome.status.value if hasattr(outcome.status, 'value') else str(outcome.status)
+                if status_val == CheckResult.FAIL.value:
+                    total_fail += 1
+                elif status_val == CheckResult.WARNING.value:
+                    total_warning += 1
+
+                all_results.append({
+                    'rule_id': outcome.rule_id,
+                    'rule_name': outcome.rule_name,
+                    'work_id': work_id,
+                    'work_title': work_title,
+                    'status': status_val,
+                    'message': outcome.message,
+                    'matched_content': outcome.matched_content,
+                })
+
+                # 仅记录违规/告警（fail/warning/error），pass 流水不落日志
+                if status_val not in COMPLIANCE_LOG_STATUSES:
+                    continue
+                violation_entries.append(build_compliance_log_entry(
+                    target_type='work',
+                    target_id=work_id,
+                    target_name=work_title[:100],
+                    outcome=outcome,
+                    category='作品合规',
+                    severity=rule_severity_map.get(outcome.rule_id, ''),
+                ))
+
+        _append_compliance_logs(violation_entries)
+
+        by_category = {}
+        by_rule = {}
+        for v in violation_entries:
+            cat = v.get('category', '作品合规')
+            by_category[cat] = by_category.get(cat, 0) + 1
+            rid = v.get('rule_id', 'unknown')
+            by_rule[rid] = by_rule.get(rid, 0) + 1
+
+        fail_entries = len([e for e in violation_entries if e.get('status') == 'fail'])
+        warning_entries = len([e for e in violation_entries if e.get('status') == 'warning'])
+        logger.info("Compliance check (works) completed: checked={}, fail={}, warning={}".format(
+            checked, total_fail, total_warning))
+
+        return {
+            'status': 'success',
+            'message': "Checked {} works".format(len(works_data)),
+            'checked': checked,
+            'pass': checked - total_fail - total_warning,
+            'fail': fail_entries,
+            'warning': warning_entries,
+            'violations': fail_entries,
+            'warnings': warning_entries,
+            'by_category': by_category,
+            'by_rule': by_rule,
+            'items': violation_entries,
+            'details': all_results,
+        }
+    except Exception as e:
+        logger.error("Compliance check (works) failed: {}".format(e))
+        return {
+            'status': 'error',
+            'message': "Compliance check (works) failed: {}".format(str(e)),
+            'checked': 0, 'pass': 0, 'fail': 0, 'warning': 0,
+            'violations': 0, 'warnings': 0, 'items': [],
+        }
+
+
 def filter_rules_for_target(rules: List[Dict[str, Any]], target_type: str) -> List[Dict[str, Any]]:
     """过滤已启用且适用目标类型为 target_type 的规则。
 

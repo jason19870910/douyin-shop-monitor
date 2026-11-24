@@ -3,6 +3,9 @@ import { useApi } from '@/hooks/useApi';
 import { earningsApi, type CreatorIncomeSummary } from '@/api/index';
 import { PageContainer, PageHeader } from '@/components/layout';
 
+// 安全获取分类列表
+const getCategories = (summary?: { category_list?: any[] }) => summary?.category_list ?? [];
+
 // 收益概览页面（/douyin/earnings）
 const Earnings = () => {
   const { data: incomeSummary, isLoading } = useApi(() => earningsApi.getIncomeSummary() as Promise<CreatorIncomeSummary | undefined>, ['creator-income-summary']);
@@ -11,7 +14,7 @@ const Earnings = () => {
     if (isLoading) return <Spin size="large" style={{ display: 'block', margin: '24px auto' }} />;
     if (!incomeSummary) return <Alert message="无法获取收益数据" type="error" showIcon />;
 
-    const totalCategories = incomeSummary.total_income_summary.category_list;
+    const totalCategories = getCategories(incomeSummary.total_income_summary);
     const hasCategoryData = totalCategories.length > 0;
 
     return (
@@ -29,7 +32,7 @@ const Earnings = () => {
           </Col>
           <Col xs={24} sm={12} lg={6}>
             <Card>
-              <Statistic title="历史总收益(分)" value={incomeSummary.total_income_summary.history_total_income || 0} precision={0} />
+              <Statistic title="历史总收益(分)" value={incomeSummary.total_income_summary?.history_total_income || 0} precision={0} />
             </Card>
           </Col>
           <Col xs={24} sm={12} lg={6}>
@@ -63,18 +66,18 @@ const Earnings = () => {
         <Divider>各周期汇总</Divider>
         <Descriptions layout="horizontal" size="middle" column={4}>
           <Descriptions.Item label="Day1 收益" span={1}>
-            <Tag color={incomeSummary.day1_income_summary.category_list.length > 0 ? 'green' : 'default'}>
-              {incomeSummary.day1_income_summary.history_total_income || 0}
+            <Tag color={getCategories(incomeSummary.day1_income_summary).length > 0 ? 'green' : 'default'}>
+              {incomeSummary.day1_income_summary?.history_total_income || 0}
             </Tag>
           </Descriptions.Item>
           <Descriptions.Item label="Day7 收益" span={1}>
-            <Tag color={incomeSummary.day7_income_summary.category_list.length > 0 ? 'green' : 'default'}>
-              {incomeSummary.day7_income_summary.history_total_income || 0}
+            <Tag color={getCategories(incomeSummary.day7_income_summary).length > 0 ? 'green' : 'default'}>
+              {incomeSummary.day7_income_summary?.history_total_income || 0}
             </Tag>
           </Descriptions.Item>
           <Descriptions.Item label="Day30 收益" span={1}>
-            <Tag color={incomeSummary.day30_income_summary.category_list.length > 0 ? 'green' : 'default'}>
-              {incomeSummary.day30_income_summary.history_total_income || 0}
+            <Tag color={getCategories(incomeSummary.day30_income_summary).length > 0 ? 'green' : 'default'}>
+              {incomeSummary.day30_income_summary?.history_total_income || 0}
             </Tag>
           </Descriptions.Item>
           <Descriptions.Item label="数据更新状态" span={1}>

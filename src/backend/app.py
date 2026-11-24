@@ -28,6 +28,7 @@ from services.fetcher import (
     fetch_and_store_videos,
     check_alerts,
     fetch_and_check_compliance,
+    fetch_and_check_compliance_works,
     _acquire_sync_lock,
     _release_sync_lock,
     _check_and_log_auth_errors,
@@ -345,6 +346,7 @@ def _run_sync_cycle():
         results['creator_works'] = fetch_and_store_creator_works()
         results['videos'] = fetch_and_store_videos()
         results['compliance'] = fetch_and_check_compliance()
+        results['compliance_works'] = fetch_and_check_compliance_works()
         results['alerts'] = check_alerts()
         
         # Check for auth errors and log (Way 2: log-only, most conservative)
@@ -368,6 +370,7 @@ def _run_sync_cycle():
                 'creators': _extract_status(results.get('creators')),
                 'creator_works': _extract_status(results.get('creator_works')),
                 'compliance': _extract_status(results.get('compliance')),
+                'compliance_works': _extract_status(results.get('compliance_works')),
                 'alerts': _extract_status(results.get('alerts')),
             },
         })
